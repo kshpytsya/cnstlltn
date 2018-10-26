@@ -7,7 +7,7 @@ class IStateStorage(zope.interface.Interface):
 
     state = zope.interface.Attribute("")
 
-    def open(*, timeout):
+    def open_and_read(read_cb):
         """
         """
 
@@ -15,6 +15,6 @@ class IStateStorage(zope.interface.Interface):
         """
         """
 
-    def set(key, value):
+    def write(write_cb):
         """
         """

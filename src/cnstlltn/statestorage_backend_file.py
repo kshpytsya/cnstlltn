@@ -1,7 +1,5 @@
 import filelock
-import json
 import os
-import types
 from atomicwrites import atomic_write
 from zope.interface import implementer
 from .statestorage_intf import IStateStorage
@@ -9,25 +7,21 @@ from .statestorage_intf import IStateStorage
 
 @implementer(IStateStorage)
 class FileStateStorage:
-    def __init__(self, path):
+    def __init__(self, path, *, timeout=1):
         self._path = path
         self._lock = filelock.FileLock(path + '.lock')
-        self._state = {}
+        self._timeout = timeout
 
-    @property
-    def state(self):
-        return types.MappingProxyType(self._state)
-
-    def open(self, *, timeout):
+    def open_and_read(self, read_cb):
         assert not self._lock.is_locked
-        self._lock.acquire(timeout=timeout)
+        self._lock.acquire(timeout=self._timeout)
 
         try:
             if os.path.exists(self._path):
                 with open(self._path) as f:
-                    self._state = json.load(f)
-
-            return self
+                    read_cb(f)
+            else:
+                read_cb(None)
 
         except:  # noqa: E722
             self._lock.release()
@@ -37,18 +31,8 @@ class FileStateStorage:
         assert self._lock.is_locked
         self._lock.release()
 
-    def set(self, key, value=None):
+    def write(self, write_cb):
         assert self._lock.is_locked
-        assert isinstance(key, str)
 
-        if value is None:
-            self._state.pop(key, None)
-        else:
-            self._state[key] = value
-
-        if self._state:
-            with atomic_write(self._path, overwrite=True) as f:
-                json.dump(self._state, f, indent=4, sort_keys=True)
-        else:
-            if os.path.exists(self._path):
-                os.unlink(self._path)
+        with atomic_write(self._path, overwrite=True) as f:
+            write_cb(f)

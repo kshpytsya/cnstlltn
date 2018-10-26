@@ -1,7 +1,6 @@
-# import ansimarkup
+import ansimarkup
 import attrdict
 import click
-import contextlib
 # import json
 # import os
 import pathlib
@@ -13,14 +12,14 @@ import tempfile
 import toposort
 
 from .model import Model
-from .statestorage_intf import IStateStorage
+from .statestorage import StateStorage
 
 
 def validate_and_finalize_model(model):
     if model.statestorage is None:
         raise click.ClickException("'statestorage' has not been set")
 
-    model.statestorage = IStateStorage(model.statestorage)
+    model.state = StateStorage(backend=model.statestorage)
 
     model.dependencies = {}
 
@@ -74,9 +73,6 @@ def load_model(path):
     raise click.ClickException("don't know how to interpret %s" % path)
 
 
-RESOURCE_KEY_PREFIX = "resource:"
-
-
 def run_script(*, kind, res_dir, res_name, debug):
     cp = subprocess.run(
         [
@@ -98,7 +94,17 @@ def run_script(*, kind, res_dir, res_name, debug):
         ))
 
 
-def up_resource(*, model, res_dir, resource, resources_vars, full, debug):
+def up_resource(
+    *,
+    debug,
+    full,
+    messages,
+    model,
+    res_dir,
+    resource,
+    resources_vars,
+    state,
+):
     res_dir.mkdir()
     exports_dir = res_dir / "exports"
     exports_dir.mkdir()
@@ -108,47 +114,39 @@ def up_resource(*, model, res_dir, resource, resources_vars, full, debug):
         for import_name, resource_name, export_name in resource.imported
     )
 
-    desired_up_files, desired_down_files = tuple(
+    new_up_files, new_down_files = tuple(
         dict(
             (fname, render_f(imports))
             for fname, render_f in bag.items()
         )
         for bag in (resource.up_files, resource.down_files)
     )
+    new_deps = sorted(model.dependencies[resource.name])
 
-    state_key = RESOURCE_KEY_PREFIX + resource.name
-    resource_state = model.statestorage.state.get(state_key, {})
-    prev_resource_state = dict(resource_state)
-
-    def save_state():
-        nonlocal prev_resource_state
-        if resource_state != prev_resource_state:
-            model.statestorage.set(state_key, resource_state)
-            prev_resource_state = dict(resource_state)
+    resource_state = state['resources'].setdefault(resource.name, {})
 
     dirty = resource_state.get("dirty", True)
-    existing_up_files = resource_state.get("up_files", None)
+    old_up_files = resource_state.get("up_files")
+    old_down_files = resource_state.get("down_files")
+    old_deps = resource_state.get("deps")
 
-    for fname, fbody in desired_up_files.items():
+    for fname, fbody in new_up_files.items():
         res_dir.joinpath(fname).write_text(fbody)
 
     resource_vars = resources_vars[resource.name] = {}
 
-    resource_state["down_files"] = desired_down_files
-    resource_state["deps"] = sorted(model.dependencies[resource.name])
+    resource_state['down_files'] = new_down_files
+    resource_state['deps'] = new_deps
 
-    if full or dirty or existing_up_files != desired_up_files:
-        click.echo("bringing up resource '{}'".format(resource.name))
+    if full or dirty or old_up_files != new_up_files:
+        click.echo("Bringing up resource '{}'".format(resource.name))
 
-        resource_state["dirty"] = True
-        resource_state.pop("exports", None)
-        resource_state["up_files"] = desired_up_files
-        save_state()
+        resource_state['dirty'] = True
+        resource_state.pop('exports', None)
+        resource_state['up_files'] = new_up_files
+        state.write()
 
-        run_script(kind="up", res_dir=res_dir, res_name=resource.name, debug=debug)
-
-        resource_state["dirty"] = False
-        resource_state["exports"] = resource_vars
+        run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
 
         for var_name in resource.exported:
             export_fname = exports_dir / var_name
@@ -166,32 +164,61 @@ def up_resource(*, model, res_dir, resource, resources_vars, full, debug):
                 resource.name,
                 ', '.join(sorted(unexpected_exports))
             ))
-    else:
-        click.echo("resource '{}' is up to date".format(resource.name))
 
-        for var_name, var_value in resource_state["exports"].items():
+        message_fname = res_dir / 'message.txt'
+        if message_fname.exists():
+            message = message_fname.read_text()
+        else:
+            message = None
+
+        resource_state['dirty'] = False
+        resource_state['exports'] = resource_vars
+        resource_state['message'] = message
+
+        state.write()
+    else:
+        click.echo("Resource '{}' is up to date".format(resource.name))
+
+        for var_name, var_value in resource_state['exports'].items():
             resource_vars[var_name] = var_value
 
-    save_state()
+        message = resource_state.get('message')
+
+        if old_deps != new_deps or old_down_files != new_down_files:
+            state.write()
+
+    if message:
+        messages.append(message)
 
 
-def down_resource(*, res_name, statestorage, res_dir, debug):
-    click.echo("bringing down resource '{}'".format(res_name))
+def down_resource(
+    *,
+    debug,
+    messages,
+    res_dir,
+    res_name,
+    state,
+):
+    click.echo("Bringing down resource '{}'".format(res_name))
 
     res_dir.mkdir()
 
-    state_key = RESOURCE_KEY_PREFIX + res_name
-    resource_state = statestorage.state[state_key]
+    resource_state = state['resources'][res_name]
 
-    for fname, fbody in resource_state["down_files"].items():
+    for fname, fbody in resource_state['down_files'].items():
         res_dir.joinpath(fname).write_text(fbody)
 
-    resource_state["dirty"] = True
-    statestorage.set(state_key, resource_state)
+    resource_state['dirty'] = True
+    state.write()
 
-    run_script(kind="down", res_dir=res_dir, res_name=res_name, debug=debug)
+    run_script(kind='down', res_dir=res_dir, res_name=res_name, debug=debug)
 
-    statestorage.set(state_key)
+    state['resources'].pop(res_name)
+    state.write()
+
+    message_fname = res_dir / 'message.txt'
+    if message_fname.exists():
+        messages.append(message_fname.read_text())
 
 
 class PathType(click.Path):
@@ -201,10 +228,9 @@ class PathType(click.Path):
 
 @click.command()
 @click.version_option()
-# TODO: list
 # TODO: only
 # TODO: tags
-@click.option('--state-timeout', type=int, default=10)
+@click.option('--pretend', '-p', is_flag=True)
 @click.option('--down', '-d', is_flag=True)
 @click.option('--full', is_flag=True)
 @click.option('--yes', '-y', is_flag=True)
@@ -225,91 +251,95 @@ def main(**kwargs):
         model = load_model(opts.file)
         validate_and_finalize_model(model)
 
-        success = False
-        work_dir = pathlib.Path(tempfile.mkdtemp(prefix="cnstlltn."))
+        with model.state as state:
+            existing_resources = state.setdefault('resources', {})
 
-        try:
-            with contextlib.closing(model.statestorage.open(timeout=opts.state_timeout)):
+            resources_to_down = set(existing_resources)
+            if opts.down:
+                resources_to_up = []
+            else:
+                resources_to_up = model.resource_order
 
-                existing_resources = dict(
-                    (i[len(RESOURCE_KEY_PREFIX):], j)
-                    for i, j in model.statestorage.state.items() if i.startswith(RESOURCE_KEY_PREFIX)
-                )
+                def keep_resources(resources):
+                    nonlocal resources_to_down
+                    resources_to_down -= set(resources)
+                    for res_name in resources:
+                        keep_resources(model.dependencies[res_name])
 
-                resources_to_down = set(existing_resources)
-                if opts.down:
-                    resources_to_up = []
-                else:
-                    resources_to_up = model.resource_order
+                keep_resources(set(model.resources))
 
-                    def keep_resources(resources):
-                        nonlocal resources_to_down
-                        resources_to_down -= set(resources)
-                        for res_name in resources:
-                            keep_resources(model.dependencies[res_name])
+            resources_to_down = [
+                j for j in
+                reversed(toposort.toposort_flatten(dict(
+                    (i, set(existing_resources[i]['deps']))
+                    for i in resources_to_down
+                )))
+                if j in resources_to_down
+            ]
 
-                    keep_resources(set(model.resources))
-
-                resources_to_down = [
-                    j for j in
-                    reversed(toposort.toposort_flatten(dict(
-                        (i, set(existing_resources[i]["deps"]))
-                        for i in resources_to_down
-                    )))
-                    if j in resources_to_down
-                ]
-
-                for what, which in [
-                    ("Will bring down: {}", resources_to_down),
-                    ("Will bring up: {}", resources_to_up),
-                ]:
-                    if which:
-                        def describe_res(name):
-                            existing_resource = existing_resources.get(name)
-                            if existing_resource is not None:
-                                if existing_resource.get("dirty", True):
-                                    return "dirty"
-                                else:
-                                    return "clean"
+            for what, which in [
+                ("Will bring down: {}", resources_to_down),
+                ("Will bring up: {}", resources_to_up),
+            ]:
+                if which:
+                    def describe_res(name):
+                        existing_resource = existing_resources.get(name)
+                        if existing_resource is not None:
+                            if existing_resource.get('dirty', True):
+                                return "dirty"
                             else:
-                                return "new"
+                                return "clean"
+                        else:
+                            return "new"
 
-                        click.echo(what.format(
-                            ", ".join(
-                                "{}({})".format(i, describe_res(i))
-                                for i in which
-                            )
-                        ))
+                    click.echo(what.format(
+                        ", ".join(
+                            "{}({})".format(i, describe_res(i))
+                            for i in which
+                        )
+                    ))
 
+            if not opts.pretend:
                 if not opts.yes and (resources_to_down or resources_to_up):
                     click.confirm("Proceed?", abort=True)
 
-                for res_i, res_name in enumerate(resources_to_down):
-                    res_dir = work_dir / "down-{:04}-{}".format(res_i, res_name)
-                    down_resource(
-                        statestorage=model.statestorage,
-                        res_dir=res_dir,
-                        res_name=res_name,
-                        debug=opts.debug
-                    )
+                success = False
+                work_dir = pathlib.Path(tempfile.mkdtemp(prefix="cnstlltn."))
+                messages = []
 
-                resources_vars = {}
-                for res_i, res_name in enumerate(resources_to_up):
-                    resource = model.resources[res_name]
-                    res_dir = work_dir / "up-{:04}-{}".format(res_i, res_name)
-                    up_resource(
-                        model=model,
-                        res_dir=res_dir,
-                        resource=resource,
-                        resources_vars=resources_vars,
-                        full=opts.full,
-                        debug=opts.debug
-                    )
-        finally:
-            if opts.debug and not success or opts.keep_work:
-                click.echo("keeping working directory: {}".format(work_dir))
-            else:
-                shutil.rmtree(work_dir)
+                try:
+                    for res_i, res_name in enumerate(resources_to_down):
+                        res_dir = work_dir / "down-{:04}-{}".format(res_i, res_name)
+                        down_resource(
+                            debug=opts.debug,
+                            messages=messages,
+                            res_dir=res_dir,
+                            res_name=res_name,
+                            state=state,
+                        )
+
+                    resources_vars = {}
+                    for res_i, res_name in enumerate(resources_to_up):
+                        resource = model.resources[res_name]
+                        res_dir = work_dir / "up-{:04}-{}".format(res_i, res_name)
+                        up_resource(
+                            debug=opts.debug,
+                            full=opts.full,
+                            messages=messages,
+                            model=model,
+                            res_dir=res_dir,
+                            resource=resource,
+                            resources_vars=resources_vars,
+                            state=state,
+                        )
+                finally:
+                    if opts.debug and not success or opts.keep_work:
+                        click.echo("keeping working directory: {}".format(work_dir))
+                    else:
+                        shutil.rmtree(work_dir)
+
+                    for message in messages:
+                        click.echo(ansimarkup.parse(message.rstrip()))
 
     except Exception as e:
         if not opts.debug and not isinstance(e, (click.exceptions.ClickException, click.exceptions.Abort)):
@@ -317,6 +347,3 @@ def main(**kwargs):
             sys.exit(1)
         else:
             raise
-
-#     text = ansimarkup.parse(text)
-# click.echo(text)
