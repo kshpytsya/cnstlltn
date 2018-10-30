@@ -94,6 +94,19 @@ def run_script(*, kind, res_dir, res_name, debug):
         ))
 
 
+def write_files(bag, dest_dir):
+    for fname, body in bag.items():
+        dest_fname = dest_dir / fname
+        dest_fname.parent.mkdir(parents=True, exist_ok=True)
+        dest_fname.write_text(body)
+
+
+def add_dicts(a, b):
+    c = dict(a)
+    c.update(b)
+    return c
+
+
 def up_resource(
     *,
     debug,
@@ -114,36 +127,38 @@ def up_resource(
         for import_name, resource_name, export_name in resource.imported
     )
 
-    new_up_files, new_down_files = tuple(
-        dict(
-            (fname, render_f(imports))
-            for fname, render_f in bag.items()
+    new_files = dict(
+        (
+            bag_name,
+            dict(
+                ('/'.join(fname), render_f(imports))
+                for fname, render_f in bag.items()
+            )
         )
-        for bag in (resource.up_files, resource.down_files)
+        for bag_name, bag in resource.files.items()
     )
+    new_up_and_common = add_dicts(new_files['common'], new_files['up'])
+    write_files(new_up_and_common, res_dir)
     new_deps = sorted(model.dependencies[resource.name])
 
     resource_state = state['resources'].setdefault(resource.name, {})
 
     dirty = resource_state.get("dirty", True)
-    old_up_files = resource_state.get("up_files")
-    old_down_files = resource_state.get("down_files")
+    old_files = resource_state.get("files", {})
+    old_up_and_common = add_dicts(old_files.get('common', {}), old_files.get('up', {}))
     old_deps = resource_state.get("deps")
-
-    for fname, fbody in new_up_files.items():
-        res_dir.joinpath(fname).write_text(fbody)
 
     resource_vars = resources_vars[resource.name] = {}
 
-    resource_state['down_files'] = new_down_files
+    resource_state['files'] = new_files
     resource_state['deps'] = new_deps
 
-    if full or dirty or old_up_files != new_up_files:
+    if full or dirty or new_up_and_common != old_up_and_common:
         click.echo("Bringing up resource '{}'".format(resource.name))
 
         resource_state['dirty'] = True
         resource_state.pop('exports', None)
-        resource_state['up_files'] = new_up_files
+        resource_state['files'] = new_files
         state.write()
 
         run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
@@ -184,7 +199,7 @@ def up_resource(
 
         message = resource_state.get('message')
 
-        if old_deps != new_deps or old_down_files != new_down_files:
+        if old_deps != new_deps or old_files != new_files:
             state.write()
 
     if message:
@@ -205,15 +220,15 @@ def down_resource(
 
     resource_state = state['resources'][res_name]
 
-    for fname, fbody in resource_state['down_files'].items():
-        res_dir.joinpath(fname).write_text(fbody)
+    for bag in ('common', 'down'):
+        write_files(resource_state.get('files', {}).get(bag, {}), res_dir)
 
     resource_state['dirty'] = True
     state.write()
 
     run_script(kind='down', res_dir=res_dir, res_name=res_name, debug=debug)
 
-    state['resources'].pop(res_name)
+    del state['resources'][res_name]
     state.write()
 
     message_fname = res_dir / 'message.txt'
