@@ -7,10 +7,16 @@ FILE_BAGS = 'up', 'down', 'common'
 class Resource:
     def __init__(self, name):
         self.name = name
+        self.tags = set()
         self.imported = set()
         self.exported = set()
         self.files = dict((bag, {}) for bag in FILE_BAGS)
         self._dirs = dict((bag, set()) for bag in FILE_BAGS)
+
+    def tag(self, *tags):
+        for tag in tags:
+            assert isinstance(tag, str), "tag must be a string"
+            self.tags.add(tag)
 
     def imports(self, **items):
         for import_name, (resource_name, export_name) in items.items():

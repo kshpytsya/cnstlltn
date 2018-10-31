@@ -46,6 +46,9 @@ def validate_and_finalize_model(model):
                         dep_res_name
                     ))
 
+        if not res.tags:
+            res.tag('untagged')
+
     try:
         model.resource_order = toposort.toposort_flatten(model.dependencies)
     except toposort.CircularDependencyError as e:
@@ -140,6 +143,7 @@ def up_resource(
     new_up_and_common = add_dicts(new_files['common'], new_files['up'])
     write_files(new_up_and_common, res_dir)
     new_deps = sorted(model.dependencies[resource.name])
+    new_tags = sorted(resource.tags)
 
     resource_state = state['resources'].setdefault(resource.name, {})
 
@@ -147,6 +151,7 @@ def up_resource(
     old_files = resource_state.get("files", {})
     old_up_and_common = add_dicts(old_files.get('common', {}), old_files.get('up', {}))
     old_deps = resource_state.get("deps")
+    old_tags = resource_state.get("tags", [])
 
     resource_vars = resources_vars[resource.name] = {}
 
@@ -199,7 +204,7 @@ def up_resource(
 
         message = resource_state.get('message')
 
-        if old_deps != new_deps or old_files != new_files:
+        if (old_deps, old_files, old_tags) != (new_deps, new_files, new_tags):
             state.write()
 
     if message:
@@ -241,78 +246,243 @@ class PathType(click.Path):
         return pathlib.Path(super().coerce_path_result(rv))
 
 
+def join_split(seq, sep=","):
+    r = sep.join(seq).split(sep)
+    if r == ['']:
+        return []
+    else:
+        return r
+
+
+def inverse_setdict(setdict):
+    result = {}
+
+    for k, v in setdict.items():
+        for i in v:
+            result.setdefault(i, set()).add(k)
+
+    return result
+
+
+def with_all_dependencies(of, deps):
+    result = of.copy()
+
+    while True:
+        new = result.copy()
+        for i in result:
+            new.update(deps.get(i, set()))
+
+        if new == result:
+            break
+
+        result = new
+
+    return result
+
+
+def with_all_dependents(of, deps):
+    return with_all_dependencies(of, inverse_setdict(deps))
+
+
+def toposort_dependencies(of, deps):
+    return list(filter(lambda i: i in of, toposort.toposort_flatten(deps)))
+
+
 @click.command()
 @click.version_option()
-# TODO: only
-# TODO: tags
-@click.option('--pretend', '-p', is_flag=True)
-@click.option('--down', '-d', is_flag=True)
-@click.option('--full', is_flag=True)
-@click.option('--yes', '-y', is_flag=True)
-@click.option('--debug', is_flag=True)
-@click.option('--keep-work', is_flag=True)
+@click.option(
+    '--only',
+    multiple=True,
+    metavar='NAMES',
+    help="Resource names to process."
+)
+@click.option(
+    '--skip',
+    multiple=True,
+    metavar='NAMES',
+    help="Resource names to skip."
+)
+@click.option(
+    '--tags', '-t',
+    multiple=True,
+    metavar='TAGS',
+    help="Tags to match resources for processing."
+)
+@click.option(
+    '--skip-tags', '-T',
+    multiple=True,
+    metavar='TAGS',
+    help="Tags of resources to skip from processing."
+)
+@click.option(
+    '--pretend',
+    '-p',
+    is_flag=True,
+    help="Stop after reporting which resources are planned for processing."
+)
+@click.option(
+    '--down', '-d',
+    is_flag=True,
+    help="Bring down all selected resources instead of bringing them up."
+)
+@click.option(
+    '--full',
+    is_flag=True,
+    help="Run 'up' scripts even for existing 'clean' resources."
+)
+@click.option(
+    '--yes', '-y',
+    is_flag=True,
+    help="Do not ask for confirmation to proceed with processing."
+)
+@click.option(
+    '--debug',
+    is_flag=True,
+    help="Do not suppress exception stack traces, keep working directory, "
+    "pass -x to bash to print commands and their arguments as they are executed."
+)
+@click.option(
+    '--keep-work',
+    is_flag=True,
+    help="Keep working directory."
+)
 @click.option(
     '--file', '-f',
     type=PathType(
         dir_okay=False,
         exists=True
     ),
-    default='Cnstlltnfile.py'
+    default='Cnstlltnfile.py',
+    help="Name of a model file to use",
+    show_default=True
 )
+# TODO .dot dependency output
+# TODO option to confirm each resource individually
 def main(**kwargs):
+    """
+    Options --only, --tags, --skip, --skip-tags take comma separated lists and can be supplied
+    multiple times with lists being accumulated.
+
+    Resource tags match tags in --tags/--skip-tags if tag intersection set is not empty.
+    Tags currently defined in the model are used for existing resources, as opposed to
+    those which where defined when those resources where previously brought up.
+
+    Both direct and indirect dependencies and dependents are considered in --only, --tags, --skip, --skip-tags.
+
+    Options --only and --tags also select dependencies of these resources for bringing up,
+    and dependents of these resources for bringing down.
+
+    Options --skip and --skip-tags guarantee that resources selected by them are not going
+    to be processed and will also skip bringing up of dependent resources and bringing
+    down of dependencies of these resources.
+    """
     opts = attrdict.AttrMap(kwargs)
+
+    opts.only = set(join_split(opts.only))
+    opts.skip = set(join_split(opts.skip))
+    opts.tags = set(join_split(opts.tags))
+    opts.skip_tags = set(join_split(opts.skip_tags))
 
     try:
         model = load_model(opts.file)
         validate_and_finalize_model(model)
 
         with model.state as state:
+            report_sets = []
+
             existing_resources = state.setdefault('resources', {})
+
+            current_tags = {}
+            for k, v in existing_resources.items():
+                current_tags[k] = set(v.get('tags', []))
+            for k, v in model.resources.items():
+                current_tags[k] = v.tags
+
+            report_sets.append((
+                "Existing resources (clean)",
+                sorted(k for k, v in existing_resources.items() if not v['dirty'])
+            ))
+            report_sets.append((
+                "Existing resources (dirty)",
+                sorted(k for k, v in existing_resources.items() if v['dirty'])
+            ))
+            report_sets.append((
+                "Resources defined in the model",
+                sorted(model.resources)
+            ))
+            report_sets.append((
+                "New resources",
+                sorted(set(model.resources) - set(existing_resources))
+            ))
+
+            for k, v in sorted(inverse_setdict(current_tags).items()):
+                report_sets.append((
+                    "Resources tagged as '{}'".format(k),
+                    sorted(v)
+                ))
+
+            existing_dependencies = dict((k, set(v['deps'])) for k, v in existing_resources.items())
+
+            def is_included(res_name):
+                return not(
+                    opts.only and res_name not in opts.only
+                    or opts.tags and opts.tags.isdisjoint(current_tags[res_name])
+                )
+
+            def is_excluded(res_name):
+                return (
+                    opts.skip and res_name in opts.skip
+                    or opts.skip_tags and not opts.skip_tags.isdisjoint(current_tags[res_name])
+                )
+
+            def is_included_and_not_excluded(res_name):
+                return is_included(res_name) and not is_excluded(res_name)
 
             resources_to_down = set(existing_resources)
             if opts.down:
                 resources_to_up = []
             else:
                 resources_to_up = model.resource_order
+                resources_to_down -= set(model.resources)
 
-                def keep_resources(resources):
-                    nonlocal resources_to_down
-                    resources_to_down -= set(resources)
-                    for res_name in resources:
-                        keep_resources(model.dependencies[res_name])
+            report_sets.append(("All resources to bring down", sorted(resources_to_down)))
+            report_sets.append(("All resources to bring up", sorted(resources_to_up)))
+            report_sets.append((
+                "Explicitly selected resources to bring down",
+                sorted(filter(is_included_and_not_excluded, resources_to_down))
+            ))
+            report_sets.append((
+                "Explicitly selected resources to bring up",
+                sorted(filter(is_included_and_not_excluded, resources_to_up))
+            ))
 
-                keep_resources(set(model.resources))
+            resources_to_down = set(filter(is_included, resources_to_down))
+            resources_to_down = with_all_dependents(resources_to_down, existing_dependencies)
+            resources_to_down -= with_all_dependencies(
+                set(filter(is_excluded, resources_to_down)),
+                existing_dependencies
+            )
+            resources_to_down = list(reversed(toposort_dependencies(resources_to_down, existing_dependencies)))
 
-            resources_to_down = [
-                j for j in
-                reversed(toposort.toposort_flatten(dict(
-                    (i, set(existing_resources[i]['deps']))
-                    for i in resources_to_down
-                )))
-                if j in resources_to_down
-            ]
+            resources_to_up = set(filter(is_included, resources_to_up))
+            resources_to_up = with_all_dependencies(resources_to_up, model.dependencies)
+            resources_to_up -= with_all_dependents(
+                set(filter(is_excluded, resources_to_up)),
+                model.dependencies
+            )
+            resources_to_up = toposort_dependencies(resources_to_up, model.dependencies)
 
-            for what, which in [
-                ("Will bring down: {}", resources_to_down),
-                ("Will bring up: {}", resources_to_up),
-            ]:
+            report_sets.append(("Will bring down (in this order)", resources_to_down))
+            report_sets.append(("Will bring up (in this order)", resources_to_up))
+
+            what_padding = max(len(what) for what, which in report_sets if which)
+
+            for what, which in report_sets:
                 if which:
-                    def describe_res(name):
-                        existing_resource = existing_resources.get(name)
-                        if existing_resource is not None:
-                            if existing_resource.get('dirty', True):
-                                return "dirty"
-                            else:
-                                return "clean"
-                        else:
-                            return "new"
+                    click.echo("{:<{}} : {}".format(what, what_padding, ", ".join(which)))
 
-                    click.echo(what.format(
-                        ", ".join(
-                            "{}({})".format(i, describe_res(i))
-                            for i in which
-                        )
-                    ))
+            if not resources_to_down and not resources_to_up:
+                click.echo("Nothing to do!")
 
             if not opts.pretend:
                 if not opts.yes and (resources_to_down or resources_to_up):
