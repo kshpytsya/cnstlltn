@@ -13,8 +13,14 @@ class Resource:
         self.imported = {}
         self.constants = {}
         self.exported = set()
-        self.files = dict((bag, {}) for bag in FILE_BAGS)
-        self._dirs = dict((bag, set()) for bag in FILE_BAGS)
+
+        def make_per_bag(what):
+            return dict((bag, what()) for bag in FILE_BAGS)
+
+        self.files = make_per_bag(dict)
+        self._dirs = make_per_bag(set)
+        self.script_chunks = make_per_bag(list)
+        self._script_chunk_seq = 0
 
     def tag(self, *tags):
         for tag in tags:
@@ -76,6 +82,17 @@ class Resource:
             wrapped_src = lambda imp: src  # noqa: E731
 
         self.files[bag][dest.parts] = wrapped_src
+
+    def script_chunk(self, bag, chunk, *, order=0, dedent_str=True):
+        assert bag in FILE_BAGS, "unknown bag: " + bag
+        assert isinstance(chunk, str), "chunk must be a string"
+        assert isinstance(order, int), "order must be an integer"
+
+        if dedent_str:
+            chunk = textwrap.dedent(chunk).lstrip()
+
+        self.script_chunks[bag].append(((order, self._script_chunk_seq), chunk))
+        self._script_chunk_seq += 1
 
 
 class Model:

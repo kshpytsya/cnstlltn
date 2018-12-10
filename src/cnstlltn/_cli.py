@@ -29,6 +29,14 @@ def validate_and_finalize_model(model):
     model.dependencies = {}
 
     for res_name, res in model.resources.items():
+        for bag in ('up', 'down'):
+            res.file(bag, "script.sh", "\n".join([
+                i[1] for i in sorted(
+                    res.script_chunks[bag] + res.script_chunks['common'],
+                    key=lambda i: i[0]
+                )
+            ]))
+
         dependencies = model.dependencies[res_name] = set()
 
         for imp_name, (dep_res_name, dep_export_name) in res.imported.items():
@@ -204,10 +212,7 @@ def run_script(*, kind, res_dir, res_name, debug, confirm_bail=False):
         [
             "/bin/bash",
             "-c",
-            # note: no comma between the following strings
-            "set -eu{}o pipefail;"
-            "shopt -s nullglob;"
-            "for i in s.*.sh; do source \"$i\"; done".format("x" if debug else "")
+            "set -eu{}o pipefail; source script.sh".format("x" if debug else "")
         ],
         cwd=res_dir
     )
