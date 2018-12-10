@@ -1,6 +1,7 @@
 import ansimarkup
 import attrdict
 import click
+import graphviz
 # import json
 # import os
 import pathlib
@@ -14,6 +15,10 @@ import toposort
 from .model import Model
 from .statestorage import StateStorage
 
+# TODO
+# shellcheck
+# dot tmpdir
+
 
 def validate_and_finalize_model(model):
     if model.statestorage is None:
@@ -26,7 +31,7 @@ def validate_and_finalize_model(model):
     for res_name, res in model.resources.items():
         dependencies = model.dependencies[res_name] = set()
 
-        for imp_name, dep_res_name, dep_export_name in res.imported:
+        for imp_name, (dep_res_name, dep_export_name) in res.imported.items():
             dependencies.add(dep_res_name)
 
             dep_res = model.resources.get(dep_res_name)
@@ -76,7 +81,125 @@ def load_model(path):
     raise click.ClickException("don't know how to interpret %s" % path)
 
 
-def run_script(*, kind, res_dir, res_name, debug):
+def process_aliases(
+    existing_resources,
+    aliases
+):
+    renames = []
+    processed = []
+
+    for name, res in existing_resources.items():
+        new_name = aliases.get(name)
+        if new_name:
+            renames.append((name, new_name))
+            processed.append((new_name, res))
+        else:
+            processed.append((name, res))
+
+    return dict(processed), renames
+
+
+def make_graph(
+    model,
+    current_tags,
+    existing_resources,
+    existing_dependencies,
+    resources_to_up,
+    resources_to_down
+):
+    # TODO show renames, dirty
+    graph = graphviz.Digraph()
+
+    def res_color(res_name):
+        if res_name in resources_to_up:
+            return 'green'
+
+        if res_name in resources_to_down:
+            return 'red'
+
+        return 'black'
+
+    for res_name, res in sorted(model.resources.items()):
+        is_existing = res_name in existing_resources
+        is_dirty = is_existing and existing_resources[res_name]['dirty']
+        label_suffix = ''
+        if is_dirty:
+            label_suffix += '*'
+        graph.node(
+            'res-' + res_name,
+            label=res_name + label_suffix,
+            color=res_color(res_name),
+            style=['solid', 'bold'][is_existing],
+            group=['new', 'existing'][is_existing]
+        )
+
+        dependencies = {}
+
+        for imp_name, (dep_res_name, dep_export_name) in res.imported.items():
+            dependencies.setdefault(dep_res_name, []).append(dep_export_name)
+
+        for dep_res_name, imports in sorted(dependencies.items()):
+            graph.edge(
+                'res-' + dep_res_name,
+                'res-' + res_name,
+                label=', '.join(sorted(imports))
+            )
+
+    for res_name, res in sorted(existing_resources.items()):
+        if res_name in model.resources:
+            continue
+
+        graph.node(
+            'res-' + res_name,
+            label=res_name,
+            color=res_color(res_name),
+            style='dashed',
+            group='old'
+        )
+
+        for dep_res_name in sorted(existing_dependencies[res_name]):
+            graph.edge(
+                'res-' + dep_res_name,
+                'res-' + res_name
+            )
+
+    all_tags = set()
+    for res_name, tags in current_tags.items():
+        for tag in tags:
+            all_tags.add(tag)
+            graph.edge(
+                'tag-' + tag,
+                'res-' + res_name,
+                style='dashed',
+                arrowhead='none'
+            )
+
+    with graph.subgraph(name='cluster_tags', graph_attr=dict(style='invis')) as subgraph:
+        for tag in all_tags:
+            subgraph.node(
+                'tag-' + tag,
+                label=tag,
+                shape='rectangle',
+                fillcolor='yellow',
+                style='filled'
+            )
+
+    for seq, seq_style in (
+        (resources_to_down, dict(color='red')),
+        (resources_to_up, dict(color='green'))
+    ):
+        for i, j in zip(seq[:-1], seq[1:]):
+            graph.edge(
+                'res-' + i,
+                'res-' + j,
+                constraint='false',
+                **seq_style
+            )
+
+    return graph
+
+
+def run_script(*, kind, res_dir, res_name, debug, confirm_bail=False):
     cp = subprocess.run(
         [
             "/bin/bash",
@@ -90,11 +213,20 @@ def run_script(*, kind, res_dir, res_name, debug):
     )
 
     if cp.returncode != 0:
-        raise click.ClickException("{} script for resource '{}' has failed with exit status {}".format(
+        error_message = "{} script for resource '{}' has failed with exit status {}".format(
             kind,
             res_name,
             cp.returncode
-        ))
+        )
+
+        if confirm_bail:
+            if click.confirm(
+                "{}. Ignore and continue (note: the resource will be permanently forgotten "
+                "and probably left in an inconsistent state requiring manual intervention)?".format(error_message)
+            ):
+                return
+
+        raise click.ClickException(error_message)
 
 
 def write_files(bag, dest_dir):
@@ -127,8 +259,9 @@ def up_resource(
 
     imports = dict(
         (import_name, resources_vars[resource_name][export_name])
-        for import_name, resource_name, export_name in resource.imported
+        for import_name, (resource_name, export_name) in resource.imported.items()
     )
+    imports.update(resource.constants)
 
     new_files = dict(
         (
@@ -157,8 +290,9 @@ def up_resource(
 
     resource_state['files'] = new_files
     resource_state['deps'] = new_deps
+    resource_state['tags'] = new_tags
 
-    if full or dirty or new_up_and_common != old_up_and_common:
+    if full or dirty or resource.always_refresh or new_up_and_common != old_up_and_common:
         click.echo("Bringing up resource '{}'".format(resource.name))
 
         resource_state['dirty'] = True
@@ -173,14 +307,14 @@ def up_resource(
             if export_fname.exists():
                 resource_vars[var_name] = export_fname.read_text()
             else:
-                raise click.ClickException("resource '{}' does not export '{}' variable".format(
+                raise click.ClickException("resource '{}' did not export '{}' variable".format(
                     resource.name,
                     var_name
                 ))
 
         unexpected_exports = set(i.name for i in exports_dir.iterdir()) - resource.exported
         if unexpected_exports:
-            raise click.ClickException("resource '{}' exports unexpected variables: {}".format(
+            raise click.ClickException("resource '{}' exported unexpected variables: {}".format(
                 resource.name,
                 ', '.join(sorted(unexpected_exports))
             ))
@@ -231,7 +365,7 @@ def down_resource(
     resource_state['dirty'] = True
     state.write()
 
-    run_script(kind='down', res_dir=res_dir, res_name=res_name, debug=debug)
+    run_script(kind='down', res_dir=res_dir, res_name=res_name, debug=debug, confirm_bail=True)
 
     del state['resources'][res_name]
     state.write()
@@ -328,12 +462,17 @@ def toposort_dependencies(of, deps):
 @click.option(
     '--full',
     is_flag=True,
-    help="Run 'up' scripts even for existing 'clean' resources."
+    help="Run 'up' scripts even for existing non-dirty up-to-date resources."
 )
 @click.option(
     '--yes', '-y',
     is_flag=True,
     help="Do not ask for confirmation to proceed with processing."
+)
+@click.option(
+    '--graph',
+    is_flag=True,
+    help="Display a visual graph of resources (uses Graphviz)"
 )
 @click.option(
     '--debug',
@@ -356,7 +495,6 @@ def toposort_dependencies(of, deps):
     help="Name of a model file to use",
     show_default=True
 )
-# TODO .dot dependency output
 # TODO option to confirm each resource individually
 def main(**kwargs):
     """
@@ -391,6 +529,8 @@ def main(**kwargs):
             report_sets = []
 
             existing_resources = state.setdefault('resources', {})
+
+            existing_resources, alias_renames = process_aliases(existing_resources, model.aliases)
 
             current_tags = {}
             for k, v in existing_resources.items():
@@ -481,12 +621,31 @@ def main(**kwargs):
                 if which:
                     click.echo("{:<{}} : {}".format(what, what_padding, ", ".join(which)))
 
+            if alias_renames:
+                click.echo("The following resources are renamed: {}".format(", ".join(
+                    "{}->{}".format(i, j) for i, j in alias_renames
+                )))
+
+            if opts.graph:
+                make_graph(
+                    model,
+                    current_tags,
+                    existing_resources,
+                    existing_dependencies,
+                    resources_to_up,
+                    resources_to_down
+                ).view()
+
             if not resources_to_down and not resources_to_up:
                 click.echo("Nothing to do!")
 
             if not opts.pretend:
                 if not opts.yes and (resources_to_down or resources_to_up):
                     click.confirm("Proceed?", abort=True)
+
+                if existing_resources is not state['resources']:
+                    state['resources'] = existing_resources
+                    state.write()
 
                 success = False
                 work_dir = pathlib.Path(tempfile.mkdtemp(prefix="cnstlltn."))

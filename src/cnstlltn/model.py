@@ -5,10 +5,13 @@ FILE_BAGS = 'up', 'down', 'common'
 
 
 class Resource:
-    def __init__(self, name):
+    def __init__(self, model, name):
+        self.model = model
         self.name = name
         self.tags = set()
-        self.imported = set()
+        self.always_refresh = False
+        self.imported = {}
+        self.constants = {}
         self.exported = set()
         self.files = dict((bag, {}) for bag in FILE_BAGS)
         self._dirs = dict((bag, set()) for bag in FILE_BAGS)
@@ -23,13 +26,22 @@ class Resource:
             assert isinstance(resource_name, str), "resource name must be a string"
             assert isinstance(export_name, str), "export name must be a string"
 
-            self.imported.add((import_name, resource_name, export_name))
+            self.imported[import_name] = resource_name, export_name
+            self.constants.pop(import_name, None)
 
         return self
+
+    def const(self, **items):
+        for name, value in items.items():
+            assert isinstance(value, str), "const value must be a string"
+
+            self.imported.pop(name, None)
+            self.constants[name] = value
 
     def exports(self, *items):
         for export_name in items:
             assert isinstance(export_name, str), "export name must be a string"
+            assert export_name.isidentifier(), "export name must be a valid identifier"
 
             self.exported.add(export_name)
 
@@ -71,20 +83,35 @@ class Model:
         self.base_path = base_path
         self.statestorage = None
         self.resources = {}
+        self.aliases = {}
 
     def resource(self, name, aliases=[]):
         assert isinstance(name, str), "resource name must be a string"
 
+        ra = self.aliases.get(name)
+        if ra:
+            raise RuntimeError("'{}' is an existing alias assigned to resource: '{}'".format(name, ra))
+
         r = self.resources.get(name)
 
         if not r:
-            r = Resource(name)
+            r = Resource(self, name)
 
             self.resources[name] = r
 
-            for alias in aliases:
-                assert isinstance(alias, str), "resource alias must be a string"
-                # TODO
-                # self.resource[alias] = r
+        for alias in aliases:
+            assert isinstance(alias, str), "resource alias must be a string"
+
+            if alias in self.resources:
+                raise RuntimeError("alias name matches existing resource: '{}'".format(alias))
+
+            if alias in self.aliases:
+                raise RuntimeError("alias '{}' for resource '{}' is already assigned to resource '{}'".format(
+                    alias,
+                    name,
+                    self.aliases[alias]
+                ))
+
+            self.aliases[alias] = name
 
         return r
