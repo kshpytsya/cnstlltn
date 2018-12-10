@@ -27,6 +27,8 @@ class Resource:
             assert isinstance(tag, str), "tag must be a string"
             self.tags.add(tag)
 
+        return self
+
     def imports(self, **items):
         for import_name, (resource_name, export_name) in items.items():
             assert isinstance(resource_name, str), "resource name must be a string"
@@ -43,6 +45,8 @@ class Resource:
 
             self.imported.pop(name, None)
             self.constants[name] = value
+
+        return self
 
     def exports(self, *items):
         for export_name in items:
@@ -83,6 +87,8 @@ class Resource:
 
         self.files[bag][dest.parts] = wrapped_src
 
+        return self
+
     def script_chunk(self, bag, chunk, *, order=0, dedent_str=True):
         assert bag in FILE_BAGS, "unknown bag: " + bag
         assert isinstance(chunk, str), "chunk must be a string"
@@ -93,6 +99,8 @@ class Resource:
 
         self.script_chunks[bag].append(((order, self._script_chunk_seq), chunk))
         self._script_chunk_seq += 1
+
+        return self
 
 
 class Model:
