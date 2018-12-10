@@ -73,7 +73,7 @@ def add_formatted_imports(
     *,
     bag='common'
 ):
-    resource.file(bag, file_name, lambda imports: format_str.format(imports))
+    resource.file(bag, file_name, lambda imports: format_str.format_map(imports))
 
 
 def add_reexport(
