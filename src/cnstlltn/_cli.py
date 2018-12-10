@@ -620,7 +620,7 @@ def main(**kwargs):
             report_sets.append(("Will bring down (in this order)", resources_to_down))
             report_sets.append(("Will bring up (in this order)", resources_to_up))
 
-            what_padding = max(len(what) for what, which in report_sets if which)
+            what_padding = max((len(what) for what, which in report_sets if which), default=0)
 
             for what, which in report_sets:
                 if which:
