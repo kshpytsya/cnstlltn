@@ -4,15 +4,14 @@ import textwrap
 FILE_BAGS = 'up', 'down', 'common'
 
 
-class Resource:
-    def __init__(self, model, name):
-        self.model = model
-        self.name = name
+class _ResourceData:
+    def __init__(self):
         self.tags = set()
         self.always_refresh = False
-        self.imported = {}
-        self.constants = {}
-        self.exported = set()
+        self.imports = {}
+        self.const = {}
+        self.exports = set()
+        self.mementos = set()
 
         def make_per_bag(what):
             return dict((bag, what()) for bag in FILE_BAGS)
@@ -22,10 +21,20 @@ class Resource:
         self.script_chunks = make_per_bag(list)
         self._script_chunk_seq = 0
 
-    def tag(self, *tags):
+
+class Resource:
+    def __init__(self, model, name):
+        self.model = model
+        self.name = name
+        self.data = _ResourceData()
+
+    def always_refresh(self):
+        self.data.always_refresh = True
+
+    def tags(self, *tags):
         for tag in tags:
             assert isinstance(tag, str), "tag must be a string"
-            self.tags.add(tag)
+            self.data.tags.add(tag)
 
         return self
 
@@ -34,8 +43,8 @@ class Resource:
             assert isinstance(resource_name, str), "resource name must be a string"
             assert isinstance(export_name, str), "export name must be a string"
 
-            self.imported[import_name] = resource_name, export_name
-            self.constants.pop(import_name, None)
+            self.data.imports[import_name] = resource_name, export_name
+            self.data.const.pop(import_name, None)
 
         return self
 
@@ -43,8 +52,8 @@ class Resource:
         for name, value in items.items():
             assert isinstance(value, str), "const value must be a string"
 
-            self.imported.pop(name, None)
-            self.constants[name] = value
+            self.data.imports.pop(name, None)
+            self.data.const[name] = value
 
         return self
 
@@ -53,7 +62,16 @@ class Resource:
             assert isinstance(export_name, str), "export name must be a string"
             assert export_name.isidentifier(), "export name must be a valid identifier"
 
-            self.exported.add(export_name)
+            self.data.exports.add(export_name)
+
+        return self
+
+    def mementos(self, *items):
+        for name in items:
+            assert isinstance(name, str), "memento name must be a string"
+            assert pathlib.posixpath.sep not in name, "memento name cannot contain path separator"
+
+            self.data.mementos.add(name)
 
         return self
 
@@ -65,17 +83,17 @@ class Resource:
         assert dest.parts, "path cannot be a directory"
 
         for check_bag in FILE_BAGS if bag == 'common' else (bag, 'common'):
-            if dest.parts in self._dirs[check_bag]:
+            if dest.parts in self.data._dirs[check_bag]:
                 raise RuntimeError("path is a directory: {}".format(dest))
 
             for prefix_len in range(1, len(dest.parts)):
                 dest_prefix = dest.parts[:prefix_len]
-                if dest_prefix in self.files[check_bag]:
+                if dest_prefix in self.data.files[check_bag]:
                     raise RuntimeError("file already exists: " + "/".join(dest_prefix))
 
-                self._dirs[check_bag].add(dest_prefix)
+                self.data._dirs[check_bag].add(dest_prefix)
 
-            self.files[check_bag].pop(dest.parts, None)
+            self.data.files[check_bag].pop(dest.parts, None)
 
         if dedent_str and isinstance(src, str):
             src = textwrap.dedent(src).lstrip()
@@ -85,7 +103,7 @@ class Resource:
         else:
             wrapped_src = lambda imp: src  # noqa: E731
 
-        self.files[bag][dest.parts] = wrapped_src
+        self.data.files[bag][dest.parts] = wrapped_src
 
         return self
 
@@ -97,8 +115,8 @@ class Resource:
         if dedent_str:
             chunk = textwrap.dedent(chunk).lstrip()
 
-        self.script_chunks[bag].append(((order, self._script_chunk_seq), chunk))
-        self._script_chunk_seq += 1
+        self.data.script_chunks[bag].append(((order, self.data._script_chunk_seq), chunk))
+        self.data._script_chunk_seq += 1
 
         return self
 

@@ -32,14 +32,14 @@ def validate_and_finalize_model(model):
         for bag in ('up', 'down'):
             res.file(bag, "script.sh", "\n".join([
                 i[1] for i in sorted(
-                    res.script_chunks[bag] + res.script_chunks['common'],
+                    res.data.script_chunks[bag] + res.data.script_chunks['common'],
                     key=lambda i: i[0]
                 )
             ]))
 
         dependencies = model.dependencies[res_name] = set()
 
-        for imp_name, (dep_res_name, dep_export_name) in res.imported.items():
+        for imp_name, (dep_res_name, dep_export_name) in res.data.imports.items():
             dependencies.add(dep_res_name)
 
             dep_res = model.resources.get(dep_res_name)
@@ -51,7 +51,7 @@ def validate_and_finalize_model(model):
                         dep_res_name
                     ))
 
-            if dep_export_name not in dep_res.exported:
+            if dep_export_name not in dep_res.data.exports:
                 raise click.ClickException(
                     "resource '{}' imports variable '{}' which is not exported by resource '{}'".format(
                         res_name,
@@ -59,8 +59,8 @@ def validate_and_finalize_model(model):
                         dep_res_name
                     ))
 
-        if not res.tags:
-            res.tag('untagged')
+        if not res.data.tags:
+            res.tags('untagged')
 
     try:
         model.resource_order = toposort.toposort_flatten(model.dependencies)
@@ -115,7 +115,7 @@ def make_graph(
     resources_to_up,
     resources_to_down
 ):
-    # TODO show renames, dirty
+    # TODO show renames
     graph = graphviz.Digraph()
 
     def res_color(res_name):
@@ -143,7 +143,7 @@ def make_graph(
 
         dependencies = {}
 
-        for imp_name, (dep_res_name, dep_export_name) in res.imported.items():
+        for imp_name, (dep_res_name, dep_export_name) in res.data.imports.items():
             dependencies.setdefault(dep_res_name, []).append(dep_export_name)
 
         for dep_res_name, imports in sorted(dependencies.items()):
@@ -153,7 +153,7 @@ def make_graph(
                 label=', '.join(sorted(imports))
             )
 
-    for res_name, res in sorted(existing_resources.items()):
+    for res_name, _ in sorted(existing_resources.items()):
         if res_name in model.resources:
             continue
 
@@ -208,6 +208,7 @@ def make_graph(
 
 
 def run_script(*, kind, res_dir, res_name, debug, confirm_bail=False):
+# TODO signal handling per https://stefan.sofa-rockers.org/2013/08/15/handling-sub-process-hierarchies-python-linux-os-x/
     cp = subprocess.run(
         [
             "/bin/bash",
@@ -241,10 +242,36 @@ def write_files(bag, dest_dir):
         dest_fname.write_text(body)
 
 
+def write_mementos(dest, state):
+    if dest.exists():
+        wipe_dir(dest)
+    else:
+        dest.mkdir()
+
+    for res_name, res in state['resources'].items():
+        res_dir_name = res_name
+        if res.get('dirty', True):
+            res_dir_name += ".dirty"
+
+        res_dir = dest / res_dir_name
+        res_dir.mkdir()
+
+        for memento_name, memento_data in res.get('mementos', {}).items():
+            (res_dir / memento_name).write_text(memento_data)
+
+
 def add_dicts(a, b):
     c = dict(a)
     c.update(b)
     return c
+
+
+def wipe_dir(d):
+    for i in d.iterdir():
+        if i.is_dir():
+            shutil.rmtree(i)
+        else:
+            i.unlink()
 
 
 def up_resource(
@@ -261,12 +288,14 @@ def up_resource(
     res_dir.mkdir()
     exports_dir = res_dir / "exports"
     exports_dir.mkdir()
+    mementos_dir = res_dir / "mementos"
+    mementos_dir.mkdir()
 
     imports = dict(
         (import_name, resources_vars[resource_name][export_name])
-        for import_name, (resource_name, export_name) in resource.imported.items()
+        for import_name, (resource_name, export_name) in resource.data.imports.items()
     )
-    imports.update(resource.constants)
+    imports.update(resource.data.const)
 
     new_files = dict(
         (
@@ -276,28 +305,50 @@ def up_resource(
                 for fname, render_f in bag.items()
             )
         )
-        for bag_name, bag in resource.files.items()
+        for bag_name, bag in resource.data.files.items()
     )
     new_up_and_common = add_dicts(new_files['common'], new_files['up'])
     write_files(new_up_and_common, res_dir)
     new_deps = sorted(model.dependencies[resource.name])
-    new_tags = sorted(resource.tags)
+    new_tags = sorted(resource.data.tags)
 
     resource_state = state['resources'].setdefault(resource.name, {})
 
-    dirty = resource_state.get("dirty", True)
-    old_files = resource_state.get("files", {})
+    dirty = resource_state.get('dirty', True)
+    old_files = resource_state.get('files', {})
     old_up_and_common = add_dicts(old_files.get('common', {}), old_files.get('up', {}))
-    old_deps = resource_state.get("deps")
-    old_tags = resource_state.get("tags", [])
+    old_deps = resource_state.get('deps')
+    old_tags = resource_state.get('tags', [])
 
     resource_vars = resources_vars[resource.name] = {}
+    resource_mementos = {}
 
     resource_state['files'] = new_files
     resource_state['deps'] = new_deps
     resource_state['tags'] = new_tags
 
-    if full or dirty or resource.always_refresh or new_up_and_common != old_up_and_common:
+    def check_products():
+        for x_kind, x_set, x_var in [
+            ("variable", resource.data.exports, resource_vars),
+            ("memento", resource.data.mementos, resource_mementos)
+        ]:
+            for x_name in x_set:
+                if x_name not in x_var:
+                    raise click.ClickException("resource '{}' did not export '{}' {}".format(
+                        resource.name,
+                        x_name,
+                        x_kind
+                    ))
+
+            unexpected = set(x_var) - x_set
+            if unexpected:
+                raise click.ClickException("resource '{}' exported unexpected {}(s): {}".format(
+                    resource.name,
+                    x_kind,
+                    ', '.join(sorted(unexpected))
+                ))
+
+    if full or dirty or resource.data.always_refresh or new_up_and_common != old_up_and_common:
         click.echo("Bringing up resource '{}'".format(resource.name))
 
         resource_state['dirty'] = True
@@ -307,22 +358,17 @@ def up_resource(
 
         run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
 
-        for var_name in resource.exported:
-            export_fname = exports_dir / var_name
-            if export_fname.exists():
-                resource_vars[var_name] = export_fname.read_text()
-            else:
-                raise click.ClickException("resource '{}' did not export '{}' variable".format(
-                    resource.name,
-                    var_name
-                ))
+        for x_dir, x_var in [
+            (exports_dir, resource_vars),
+            (mementos_dir, resource_mementos)
+        ]:
+            for i in x_dir.iterdir():
+                if i.is_file():
+                    x_var[i.name] = i.read_text()
+                else:
+                    raise click.ClickException("don't know how to deal with '{}'".format(i.absolute()))
 
-        unexpected_exports = set(i.name for i in exports_dir.iterdir()) - resource.exported
-        if unexpected_exports:
-            raise click.ClickException("resource '{}' exported unexpected variables: {}".format(
-                resource.name,
-                ', '.join(sorted(unexpected_exports))
-            ))
+        check_products()
 
         message_fname = res_dir / 'message.txt'
         if message_fname.exists():
@@ -332,14 +378,17 @@ def up_resource(
 
         resource_state['dirty'] = False
         resource_state['exports'] = resource_vars
+        resource_state['mementos'] = resource_mementos
         resource_state['message'] = message
 
         state.write()
     else:
         click.echo("Resource '{}' is up to date".format(resource.name))
 
-        for var_name, var_value in resource_state['exports'].items():
-            resource_vars[var_name] = var_value
+        resource_vars.update(resource_state.get('exports', {}))
+        resource_mementos = resource_state.get('mementos', {})
+
+        check_products()
 
         message = resource_state.get('message')
 
@@ -500,6 +549,14 @@ def toposort_dependencies(of, deps):
     help="Name of a model file to use",
     show_default=True
 )
+@click.option(
+    '--mementos', '-m',
+    type=PathType(
+        file_okay=False
+    ),
+    help="Directory into which to store model mementos. Warning: will completely wipe the directory! "
+    "Note that mementos will only be stored in case of a successful execution"
+)
 # TODO option to confirm each resource individually
 def main(**kwargs):
     """
@@ -541,7 +598,7 @@ def main(**kwargs):
             for k, v in existing_resources.items():
                 current_tags[k] = set(v.get('tags', []))
             for k, v in model.resources.items():
-                current_tags[k] = v.tags
+                current_tags[k] = v.data.tags
 
             report_sets.append((
                 "Existing resources (clean)",
@@ -689,6 +746,9 @@ def main(**kwargs):
 
                     for message in messages:
                         click.echo(ansimarkup.parse(message.rstrip()))
+
+            if opts.mementos:
+                write_mementos(opts.mementos, state)
 
     except Exception as e:
         if not opts.debug and not isinstance(e, (click.exceptions.ClickException, click.exceptions.Abort)):
