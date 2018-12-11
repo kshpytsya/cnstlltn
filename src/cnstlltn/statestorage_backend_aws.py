@@ -8,7 +8,7 @@ from .statestorage_intf import IStateStorage
 
 @implementer(IStateStorage)
 class AwsStateStorage:
-    def __init__(self, s3_bucket, s3_key, locking=True):
+    def __init__(self, s3_bucket, s3_key, *, locking=True):
         self._s3_bucket_name = s3_bucket
         self._s3_key = s3_key
         # self._timeout = timeout
