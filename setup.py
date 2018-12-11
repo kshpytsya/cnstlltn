@@ -22,6 +22,6 @@ setup(
         'zope.interface>=4.5,<5',
     ],
     extras_require={
-        'aws': ['boto3~=1.9.5']
+        'aws': ['boto3>=1.9.62,<2', 'python_dynamodb_lock>=0.9.1,<1']
     }
 )
