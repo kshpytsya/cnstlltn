@@ -14,6 +14,10 @@ def add_files_to_resource(
     https://formic.readthedocs.io/en/latest/api.html
     """
 
+    dest = pathlib.Path(formic_kw.pop('dest', '.'))
+    assert not dest.is_absolute(), "'dest' cannot be an absolute path"
+    assert '..' not in dest.parts, "'dest' path cannot contain '..'"
+
     directory = pathlib.Path(formic_kw.pop('directory', '.'))
     if not directory.is_absolute():
         directory = resource.model.base_path.joinpath(directory).resolve()
@@ -22,12 +26,12 @@ def add_files_to_resource(
 
     for file_name in formic.FileSet(*formic_args, **formic_kw):
         file_path = pathlib.Path(file_name)
-        rel_file_path = file_path.relative_to(directory)
+        dest_file_path = dest.joinpath(file_path.relative_to(directory))
 
         if not file_path.is_file():
             raise RuntimeError("do not know how to deal with '{}'".format(file_path))
 
-        resource.file(bag, rel_file_path, lambda _, file_path=file_path: file_path.read_text())
+        resource.file(bag, dest_file_path, lambda _, file_path=file_path: file_path.read_text())
 
 
 def add_imports_as_json(
