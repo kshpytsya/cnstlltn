@@ -242,6 +242,20 @@ def write_files(bag, dest_dir):
         dest_fname.write_text(body)
 
 
+def read_files(path, *, cb=lambda _: None, dest=None):
+    if dest is None:
+        dest = {}
+
+    for i in path.iterdir():
+        if i.is_file():
+            dest[i.name] = i.read_text()
+            cb(i)
+        else:
+            raise click.ClickException("don't know how to deal with '{}'".format(i.absolute()))
+
+    return dest
+
+
 def write_mementos(dest, state):
     if dest.exists():
         wipe_dir(dest)
@@ -295,6 +309,7 @@ def up_resource(
     exports_dir.mkdir()
     mementos_dir = res_dir / "mementos"
     mementos_dir.mkdir()
+    istate_dir = res_dir / "state"
 
     imports = dict(
         (import_name, resources_vars[resource_name][export_name])
@@ -319,6 +334,11 @@ def up_resource(
 
     resource_state = state['resources'].setdefault(resource.name, {})
 
+    istate = resource_state.get('state')
+    if istate is not None:
+        istate_dir.mkdir()
+        write_files(istate, istate_dir)
+
     dirty = resource_state.get('dirty', True)
     old_files = resource_state.get('files', {})
     old_up_and_common = add_dicts(old_files.get('common', {}), old_files.get('up', {}))
@@ -326,7 +346,6 @@ def up_resource(
     old_tags = resource_state.get('tags', [])
 
     resource_vars = resources_vars[resource.name] = {}
-    resource_mementos = {}
     resource_mementos_modes = {}
 
     resource_state['files'] = new_files
@@ -364,22 +383,20 @@ def up_resource(
 
         run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
 
+        read_files(exports_dir, dest=resource_vars)
+
+        if istate_dir.is_dir():
+            istate = read_files(istate_dir)
+        else:
+            istate = None
+
         def memento_cb(path):
             resource_mementos_modes.setdefault(
-                oct(i.stat().st_mode & 0o777),
+                oct(path.stat().st_mode & 0o777),
                 []
-            ).append(i.name)
+            ).append(path.name)
 
-        for x_dir, x_var, x_cb in [
-            (exports_dir, resource_vars, lambda _: None),
-            (mementos_dir, resource_mementos, memento_cb)
-        ]:
-            for i in x_dir.iterdir():
-                if i.is_file():
-                    x_var[i.name] = i.read_text()
-                    x_cb(i)
-                else:
-                    raise click.ClickException("don't know how to deal with '{}'".format(i.absolute()))
+        resource_mementos = read_files(mementos_dir, cb=memento_cb)
 
         check_products()
 
@@ -394,6 +411,10 @@ def up_resource(
         resource_state['mementos'] = resource_mementos
         resource_state['mementos_modes'] = resource_mementos_modes
         resource_state['message'] = message
+        if istate is not None:
+            resource_state['state'] = istate
+        else:
+            resource_state.pop('state', None)
 
         state.write()
     else:
