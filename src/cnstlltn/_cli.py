@@ -259,6 +259,11 @@ def write_mementos(dest, state):
         for memento_name, memento_data in res.get('mementos', {}).items():
             (res_dir / memento_name).write_text(memento_data)
 
+        for mode_str, mementos_names in res.get('mementos_modes', {}).items():
+            mode = int(mode_str, base=0)
+            for memento_name in mementos_names:
+                (res_dir / memento_name).chmod(mode)
+
 
 def add_dicts(a, b):
     c = dict(a)
@@ -322,6 +327,7 @@ def up_resource(
 
     resource_vars = resources_vars[resource.name] = {}
     resource_mementos = {}
+    resource_mementos_modes = {}
 
     resource_state['files'] = new_files
     resource_state['deps'] = new_deps
@@ -358,13 +364,20 @@ def up_resource(
 
         run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
 
-        for x_dir, x_var in [
-            (exports_dir, resource_vars),
-            (mementos_dir, resource_mementos)
+        def memento_cb(path):
+            resource_mementos_modes.setdefault(
+                oct(i.stat().st_mode & 0o777),
+                []
+            ).append(i.name)
+
+        for x_dir, x_var, x_cb in [
+            (exports_dir, resource_vars, lambda _: None),
+            (mementos_dir, resource_mementos, memento_cb)
         ]:
             for i in x_dir.iterdir():
                 if i.is_file():
                     x_var[i.name] = i.read_text()
+                    x_cb(i)
                 else:
                     raise click.ClickException("don't know how to deal with '{}'".format(i.absolute()))
 
@@ -379,6 +392,7 @@ def up_resource(
         resource_state['dirty'] = False
         resource_state['exports'] = resource_vars
         resource_state['mementos'] = resource_mementos
+        resource_state['mementos_modes'] = resource_mementos_modes
         resource_state['message'] = message
 
         state.write()
