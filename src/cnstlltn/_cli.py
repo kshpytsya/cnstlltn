@@ -208,7 +208,8 @@ def make_graph(
 
 
 def run_script(*, kind, res_dir, res_name, debug, confirm_bail=False):
-# TODO signal handling per https://stefan.sofa-rockers.org/2013/08/15/handling-sub-process-hierarchies-python-linux-os-x/
+    # TODO signal handling per
+    # https://stefan.sofa-rockers.org/2013/08/15/handling-sub-process-hierarchies-python-linux-os-x/
     cp = subprocess.run(
         [
             "/bin/bash",
