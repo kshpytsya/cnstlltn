@@ -2,7 +2,7 @@ import ansimarkup
 import attrdict
 import click
 import graphviz
-# import json
+import json
 # import os
 import pathlib
 import runpy
@@ -593,6 +593,11 @@ def toposort_dependencies(of, deps):
     help="Directory into which to store model mementos. Warning: will completely wipe the directory! "
     "Note that mementos will only be stored in case of a successful execution"
 )
+@click.option(
+    '--edit',
+    is_flag=True,
+    help="Edit the state json after initial load. Thread carefully and make backups!"
+)
 # TODO option to confirm each resource individually
 def main(**kwargs):
     """
@@ -624,6 +629,27 @@ def main(**kwargs):
         validate_and_finalize_model(model)
 
         with model.state as state:
+            if opts.edit:
+                edited_state_str = json.dumps(state, indent=4, sort_keys=True)
+
+                while True:
+                    edited_state_str = click.edit(text=edited_state_str, extension='.json')
+
+                    if edited_state_str is None:
+                        click.confirm("File was not saved. Continue execution with unedited state?", abort=True)
+                    else:
+                        try:
+                            edited_state = json.loads(edited_state_str)
+                        except json.JSONDecodeError as e:
+                            click.confirm("Error parsing json: {}. Continue editing?".format(e), abort=True)
+                            continue
+
+                        state.clear()
+                        state.update(edited_state)
+                        state.write()
+
+                    break
+
             report_sets = []
 
             existing_resources = state.setdefault('resources', {})
