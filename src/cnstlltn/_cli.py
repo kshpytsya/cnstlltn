@@ -1,6 +1,7 @@
 import ansimarkup
 import attrdict
 import click
+import difflib
 import graphviz
 import json
 # import os
@@ -294,6 +295,24 @@ def wipe_dir(d):
             i.unlink()
 
 
+def show_dict_diff(old, new):
+    diffs = []
+
+    for name in sorted(set(old) | set(new)):
+        old_lines = old.get(name, '').splitlines(keepends=True)
+        new_lines = new.get(name, '').splitlines(keepends=True)
+        diff = difflib.unified_diff(old_lines, new_lines, name, name, 'old', 'new')
+        diffs.extend(diff)
+
+    def cutline():
+        click.echo("." * 80)
+
+    if diffs:
+        cutline()
+        click.echo("".join(diffs), nl=False)
+        cutline()
+
+
 def up_resource(
     *,
     debug,
@@ -376,6 +395,9 @@ def up_resource(
 
     if full or dirty or resource.data.always_refresh or new_up_and_common != old_up_and_common:
         click.echo("Bringing up resource '{}'".format(resource.name))
+
+        if debug:
+            show_dict_diff(old_up_and_common, new_up_and_common)
 
         resource_state['dirty'] = True
         resource_state.pop('exports', None)
