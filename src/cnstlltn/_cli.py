@@ -150,7 +150,7 @@ def make_graph(
             graph.edge(
                 'res-' + dep_res_name,
                 'res-' + res_name,
-                label=', '.join(sorted(imports))
+                label=",\n".join(sorted(imports))
             )
 
     for res_name, _ in sorted(existing_resources.items()):
