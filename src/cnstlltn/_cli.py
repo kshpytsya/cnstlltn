@@ -352,6 +352,7 @@ def up_resource(
     new_deps = sorted(model.dependencies[resource.name])
     new_tags = sorted(resource.data.tags)
 
+    is_new_resource = resource.name not in state['resources']
     resource_state = state['resources'].setdefault(resource.name, {})
 
     istate = resource_state.get('state')
@@ -396,7 +397,7 @@ def up_resource(
     if full or dirty or resource.data.always_refresh or new_up_and_common != old_up_and_common:
         click.echo("Bringing up resource '{}'".format(resource.name))
 
-        if debug:
+        if debug and not is_new_resource:
             show_dict_diff(old_up_and_common, new_up_and_common)
 
         resource_state['dirty'] = True
