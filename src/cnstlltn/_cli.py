@@ -69,23 +69,23 @@ def validate_and_finalize_model(model):
         raise click.ClickException("circular resource dependencies: {}".format(e.data))
 
 
-def load_py_model(path):
+def load_py_model(path, workspace):
     py = runpy.run_path(path)
 
     configure_f = py.get('configure')
     if not callable(configure_f):
         raise click.ClickException("'configure' function is not defined or is not a callable")
 
-    model = Model(path.parent)
+    model = Model(path.parent, workspace)
 
     configure_f(model)
 
     return model
 
 
-def load_model(path):
+def load_model(path, workspace):
     if path.suffix == '.py':
-        return load_py_model(path)
+        return load_py_model(path, workspace)
 
     raise click.ClickException("don't know how to interpret %s" % path)
 
@@ -538,6 +538,13 @@ def toposort_dependencies(of, deps):
 @click.command()
 @click.version_option()
 @click.option(
+    '--workspace', '-w',
+    metavar='NAME',
+    default="",
+    help="Name of a workspace to use.",
+    show_default=True
+)
+@click.option(
     '--only',
     multiple=True,
     metavar='NAMES',
@@ -648,7 +655,7 @@ def main(**kwargs):
     opts.skip_tags = set(join_split(opts.skip_tags))
 
     try:
-        model = load_model(opts.file)
+        model = load_model(opts.file, opts.workspace)
         validate_and_finalize_model(model)
 
         with model.state as state:
@@ -672,6 +679,19 @@ def main(**kwargs):
                         state.write()
 
                     break
+
+            if state:
+                state_workspace = state.get("workspace", "")
+                if opts.workspace != state_workspace:
+                    raise click.ClickException(
+                        "Workspace stored in state (\"{}\") "
+                        "does not match workspace selected via --workspace (\"{}\")".format(
+                            state_workspace,
+                            opts.workspace
+                        )
+                    )
+            else:
+                state["workspace"] = opts.workspace
 
             report_sets = []
 

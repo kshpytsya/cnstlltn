@@ -122,8 +122,9 @@ class Resource:
 
 
 class Model:
-    def __init__(self, base_path):
+    def __init__(self, base_path, workspace):
         self.base_path = base_path
+        self.workspace = workspace
         self.statestorage = None
         self.resources = {}
         self.aliases = {}
