@@ -1,7 +1,6 @@
 import ansimarkup
 import attrdict
 import click
-import difflib
 import graphviz
 import json
 # import os
@@ -13,6 +12,7 @@ import sys
 import tempfile
 import toposort
 
+from . import diffformatter
 from .model import Model
 from .statestorage import StateStorage
 
@@ -299,10 +299,11 @@ def show_dict_diff(old, new):
     diffs = []
 
     for name in sorted(set(old) | set(new)):
-        old_lines = old.get(name, '').splitlines(keepends=True)
-        new_lines = new.get(name, '').splitlines(keepends=True)
-        diff = difflib.unified_diff(old_lines, new_lines, name, name, 'old', 'new')
-        diffs.extend(diff)
+        diffs.extend(diffformatter.format_diff(
+            old.get(name, ''),
+            new.get(name, ''),
+            header=["modified: {}".format(name)]
+        ))
 
     def cutline():
         click.echo("." * 80)
