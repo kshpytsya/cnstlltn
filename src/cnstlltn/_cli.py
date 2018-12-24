@@ -542,69 +542,69 @@ def toposort_dependencies(of, deps):
     '--workspace', '-w',
     metavar='NAME',
     default="",
-    help="Name of a workspace to use.",
+    help="name of a workspace to use",
     show_default=True
 )
 @click.option(
     '--only',
     multiple=True,
     metavar='NAMES',
-    help="Resource names to process."
+    help="resource names to process"
 )
 @click.option(
     '--skip',
     multiple=True,
     metavar='NAMES',
-    help="Resource names to skip."
+    help="resource names to skip"
 )
 @click.option(
     '--tags', '-t',
     multiple=True,
     metavar='TAGS',
-    help="Tags to match resources for processing."
+    help="tags to match resources for processing"
 )
 @click.option(
     '--skip-tags', '-T',
     multiple=True,
     metavar='TAGS',
-    help="Tags of resources to skip from processing."
+    help="tags of resources to skip from processing"
 )
 @click.option(
     '--pretend',
     '-p',
     is_flag=True,
-    help="Stop after reporting which resources are planned for processing."
+    help="stop after reporting which resources are planned for processing"
 )
 @click.option(
     '--down', '-d',
     is_flag=True,
-    help="Bring down all selected resources instead of bringing them up."
+    help="bring down all selected resources instead of bringing them up"
 )
 @click.option(
     '--full',
     is_flag=True,
-    help="Run 'up' scripts even for existing non-dirty up-to-date resources."
+    help="run 'up' scripts even for existing non-dirty up-to-date resources"
 )
 @click.option(
     '--yes', '-y',
     is_flag=True,
-    help="Do not ask for confirmation to proceed with processing."
+    help="do not ask for confirmation to proceed with processing"
 )
 @click.option(
     '--graph',
     is_flag=True,
-    help="Display a visual graph of resources (uses Graphviz)"
+    help="display a visual graph of resources (uses Graphviz)"
 )
 @click.option(
     '--debug',
     is_flag=True,
-    help="Do not suppress exception stack traces, keep working directory, "
-    "pass -x to bash to print commands and their arguments as they are executed."
+    help="do not suppress exception stack traces, keep working directory, "
+    "pass -x to bash to print commands and their arguments as they are executed"
 )
 @click.option(
     '--keep-work',
     is_flag=True,
-    help="Keep working directory."
+    help="keep working directory"
 )
 @click.option(
     '--file', '-f',
@@ -613,7 +613,7 @@ def toposort_dependencies(of, deps):
         exists=True
     ),
     default='Cnstlltnfile.py',
-    help="Name of a model file to use",
+    help="name of a model file to use",
     show_default=True
 )
 @click.option(
@@ -621,13 +621,13 @@ def toposort_dependencies(of, deps):
     type=PathType(
         file_okay=False
     ),
-    help="Directory into which to store model mementos. Warning: will completely wipe the directory! "
+    help="directory into which to store model mementos. Warning: will completely wipe the directory! "
     "Note that mementos will only be stored in case of a successful execution"
 )
 @click.option(
     '--edit',
     is_flag=True,
-    help="Edit the state json after initial load. Thread carefully and make backups!"
+    help="edit the state json after initial load. Thread carefully and make backups!"
 )
 # TODO option to confirm each resource individually
 def main(**kwargs):
