@@ -229,8 +229,8 @@ def run_script(*, kind, res_dir, res_name, debug, confirm_bail=False):
 
         if confirm_bail:
             if click.confirm(
-                "{}. Ignore and continue (note: the resource will be permanently forgotten "
-                "and probably left in an inconsistent state requiring manual intervention)?".format(error_message)
+                "{}. Ignore and continue? Note: the resource will be permanently forgotten "
+                "and probably left in an inconsistent state requiring manual intervention".format(error_message)
             ):
                 return
 
