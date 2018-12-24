@@ -317,6 +317,7 @@ def show_dict_diff(old, new):
 def up_resource(
     *,
     debug,
+    step,
     full,
     messages,
     model,
@@ -406,6 +407,9 @@ def up_resource(
         resource_state['files'] = new_files
         state.write()
 
+        if step:
+            click.confirm("Proceed?", abort=True, default=True)
+
         run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
 
         read_files(exports_dir, dest=resource_vars)
@@ -462,12 +466,16 @@ def up_resource(
 def down_resource(
     *,
     debug,
+    step,
     messages,
     res_dir,
     res_name,
     state,
 ):
-    click.echo("Bringing down resource '{}'".format(res_name))
+    if step:
+        click.confirm("Bringing down resource '{}'. Proceed?".format(res_name), abort=True, default=True)
+    else:
+        click.echo("Bringing down resource '{}'".format(res_name))
 
     res_dir.mkdir()
 
@@ -591,6 +599,11 @@ def toposort_dependencies(of, deps):
     help="do not ask for confirmation to proceed with processing"
 )
 @click.option(
+    '--step',
+    is_flag=True,
+    help="confirm execution of each resource 'up'/'down' script"
+)
+@click.option(
     '--graph',
     is_flag=True,
     help="display a visual graph of resources (uses Graphviz)"
@@ -629,7 +642,6 @@ def toposort_dependencies(of, deps):
     is_flag=True,
     help="edit the state json after initial load. Thread carefully and make backups!"
 )
-# TODO option to confirm each resource individually
 def main(**kwargs):
     """
     Options --only, --tags, --skip, --skip-tags take comma separated lists and can be supplied
@@ -824,6 +836,7 @@ def main(**kwargs):
                         res_dir = work_dir / "down-{:04}-{}".format(res_i, res_name)
                         down_resource(
                             debug=opts.debug,
+                            step=opts.step,
                             messages=messages,
                             res_dir=res_dir,
                             res_name=res_name,
@@ -836,6 +849,7 @@ def main(**kwargs):
                         res_dir = work_dir / "up-{:04}-{}".format(res_i, res_name)
                         up_resource(
                             debug=opts.debug,
+                            step=opts.step,
                             full=opts.full,
                             messages=messages,
                             model=model,
