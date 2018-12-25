@@ -1,4 +1,5 @@
 import formic
+import jinja2
 import json
 import pathlib
 import shlex
@@ -78,6 +79,33 @@ def add_formatted_imports(
     bag='common'
 ):
     resource.file(bag, file_name, lambda imports: format_str.format_map(imports))
+
+
+def add_jinja(
+    resource,
+    file_name,
+    template_str,
+    *,
+    bag='common',
+    validator=None,
+    jinja_opts=None
+):
+    if jinja_opts is None:
+        jinja_opts = dict(
+            undefined=jinja2.runtime.StrictUndefined
+        )
+
+    template = jinja2.Template(template_str, **jinja_opts)
+
+    def render(imports):
+        result = template.render(imports)
+
+        if validator:
+            validator(result)
+
+        return result
+
+    resource.file(bag, file_name, render)
 
 
 def add_reexport(
