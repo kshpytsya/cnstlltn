@@ -88,7 +88,8 @@ def add_jinja(
     *,
     bag='common',
     validator=None,
-    jinja_opts=None
+    jinja_opts=None,
+    consts={}
 ):
     if jinja_opts is None:
         jinja_opts = dict(
@@ -98,7 +99,7 @@ def add_jinja(
     template = jinja2.Template(template_str, **jinja_opts)
 
     def render(imports):
-        result = template.render(imports)
+        result = template.render(consts, **imports)
 
         if validator:
             validator(result)
