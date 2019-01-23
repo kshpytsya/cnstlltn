@@ -3,6 +3,7 @@ import jinja2
 import json
 import pathlib
 import shlex
+import textwrap
 
 
 def add_files_to_resource(
@@ -89,12 +90,16 @@ def add_jinja(
     bag='common',
     validator=None,
     jinja_opts=None,
-    consts={}
+    consts={},
+    dedent_str=False
 ):
     if jinja_opts is None:
         jinja_opts = dict(
             undefined=jinja2.runtime.StrictUndefined
         )
+
+    if dedent_str:
+        template_str = textwrap.dedent(template_str).lstrip()
 
     template = jinja2.Template(template_str, **jinja_opts)
 
