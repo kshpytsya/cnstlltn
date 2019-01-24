@@ -91,17 +91,23 @@ def add_jinja(
     validator=None,
     jinja_opts=None,
     consts={},
-    dedent_str=False
+    dedent_str=False,
+    jinja_files={}
 ):
     if jinja_opts is None:
         jinja_opts = dict(
             undefined=jinja2.runtime.StrictUndefined
         )
+    else:
+        jinja_opts = dict(jinja_opts)
+
+    jinja_opts.setdefault("loader", jinja2.DictLoader(jinja_files))
+    jinja_env = jinja2.Environment(**jinja_opts)
 
     if dedent_str:
         template_str = textwrap.dedent(template_str).lstrip()
 
-    template = jinja2.Template(template_str, **jinja_opts)
+    template = jinja_env.from_string(template_str)
 
     def render(imports):
         result = template.render(consts, **imports)
