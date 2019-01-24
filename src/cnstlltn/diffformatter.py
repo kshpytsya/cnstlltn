@@ -106,7 +106,7 @@ def format_diff(a, b, *, color=True, header=[]):
             else:
                 yield from dump('-', SIMPLE_DEL_STYLE, a[alo:ahi])
         elif blo < bhi:
-            yield from dump('+', SIMPLE_INS_STYLE, b[blo, bhi])
+            yield from dump('+', SIMPLE_INS_STYLE, b[blo:bhi])
 
     sm = difflib.SequenceMatcher(a=a, b=b)
 
