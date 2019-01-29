@@ -80,7 +80,11 @@ def load_py_model(path, workspace):
 
     configure_f(model)
 
-    return model
+    notify_f = py.get('notify', lambda *a: None)
+    if not callable(notify_f):
+        raise click.ClickException("'notify' is not a callable")
+
+    return model, lambda *a: notify_f(model, *a)
 
 
 def load_model(path, workspace):
@@ -667,11 +671,14 @@ def main(**kwargs):
     opts.tags = set(join_split(opts.tags))
     opts.skip_tags = set(join_split(opts.skip_tags))
 
+    model = None
+
     try:
-        model = load_model(opts.file, opts.workspace)
+        model, notification_cb = load_model(opts.file, opts.workspace)
         validate_and_finalize_model(model)
 
         with model.state as state:
+            notification_cb('lock')
             if opts.edit:
                 edited_state_str = json.dumps(state, indent=4, sort_keys=True)
 
@@ -831,9 +838,12 @@ def main(**kwargs):
                 work_dir = pathlib.Path(tempfile.mkdtemp(prefix="cnstlltn."))
                 messages = []
 
+                notification_cb('start')
+
                 try:
                     for res_i, res_name in enumerate(resources_to_down):
                         res_dir = work_dir / "down-{:04}-{}".format(res_i, res_name)
+                        notification_cb('resource-down-start', res_name)
                         down_resource(
                             debug=opts.debug,
                             step=opts.step,
@@ -842,11 +852,13 @@ def main(**kwargs):
                             res_name=res_name,
                             state=state,
                         )
+                        notification_cb('resource-down-done', res_name)
 
                     resources_vars = {}
                     for res_i, res_name in enumerate(resources_to_up):
                         resource = model.resources[res_name]
                         res_dir = work_dir / "up-{:04}-{}".format(res_i, res_name)
+                        notification_cb('resource-up-start', res_name)
                         up_resource(
                             debug=opts.debug,
                             step=opts.step,
@@ -858,6 +870,7 @@ def main(**kwargs):
                             resources_vars=resources_vars,
                             state=state,
                         )
+                        notification_cb('resource-up-done', res_name)
                 finally:
                     if opts.debug and not success or opts.keep_work:
                         click.echo("keeping working directory: {}".format(work_dir))
@@ -870,7 +883,14 @@ def main(**kwargs):
             if opts.mementos:
                 write_mementos(opts.mementos, state)
 
+        notification_cb('success')
     except Exception as e:
+        if notification_cb:
+            if isinstance(e, click.exceptions.Abort):
+                notification_cb('abort')
+            else:
+                notification_cb('fail')
+
         if not opts.debug and not isinstance(e, (click.exceptions.ClickException, click.exceptions.Abort)):
             click.secho("error: {}".format(e), err=True, fg='red')
             sys.exit(1)
