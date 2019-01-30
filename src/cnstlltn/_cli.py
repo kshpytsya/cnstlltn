@@ -806,7 +806,12 @@ def main(**kwargs):
 
             for what, which in report_sets:
                 if which:
-                    click.echo("{:<{}} : {}".format(what, what_padding, ", ".join(which)))
+                    click.echo("{}{:<{}} : {}".format(
+                        click.style(what, underline=True),
+                        '',
+                        what_padding - len(what),
+                        ", ".join(which)
+                    ))
 
             if alias_renames:
                 click.echo("The following resources are renamed: {}".format(", ".join(
