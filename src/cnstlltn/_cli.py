@@ -660,7 +660,7 @@ def toposort_dependencies(of, deps):
 @click.option(
     '--edit',
     is_flag=True,
-    help="edit the state json after initial load. Thread carefully and make backups!"
+    help="edit the state json after initial load. Tread carefully and make backups!"
 )
 def main(**kwargs):
     """
