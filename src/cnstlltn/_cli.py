@@ -1,10 +1,13 @@
 import ansimarkup
 import attrdict
+import braceexpand
 import click
+import fnmatch
 import graphviz
 import json
 # import os
 import pathlib
+import re
 import runpy
 import shutil
 import subprocess
@@ -318,6 +321,19 @@ def show_dict_diff(old, new):
         cutline()
 
 
+def names_to_re(names):
+    if names:
+        return re.compile(
+            '|'.join(
+                fnmatch.translate(j)
+                for i in names
+                for j in braceexpand.braceexpand(i)
+            )
+        )
+    else:
+        return None
+
+
 def up_resource(
     *,
     debug,
@@ -506,8 +522,8 @@ class PathType(click.Path):
         return pathlib.Path(super().coerce_path_result(rv))
 
 
-def join_split(seq, sep=","):
-    r = sep.join(seq).split(sep)
+def join_split(seq, sep=None):
+    r = (sep or " ").join(seq).split(sep)
     if r == ['']:
         return []
     else:
@@ -648,8 +664,16 @@ def toposort_dependencies(of, deps):
 )
 def main(**kwargs):
     """
-    Options --only, --tags, --skip, --skip-tags take comma separated lists and can be supplied
-    multiple times with lists being accumulated.
+    Options --only, --tags, --skip, --skip-tags take space separated lists and can be supplied
+    multiple times with lists being accumulated. Note that it is necessary to use quoting or
+    backslash to include space as a part of an option value.
+
+    Names specified in --only and --skip are expanded using Bash-style brace expansion [1]
+    and are treated as Unix shell-style wildcards [2]. Note that if any of these features
+    are used, it is necessary to use quoting.
+
+    [1] https://github.com/trendels/braceexpand
+    [2] https://docs.python.org/3.7/library/fnmatch.html
 
     Resource tags match tags in --tags/--skip-tags if tag intersection set is not empty.
     Tags currently defined in the model are used for existing resources, as opposed to
@@ -666,8 +690,8 @@ def main(**kwargs):
     """
     opts = attrdict.AttrMap(kwargs)
 
-    opts.only = set(join_split(opts.only))
-    opts.skip = set(join_split(opts.skip))
+    opts.only = names_to_re(join_split(opts.only))
+    opts.skip = names_to_re(join_split(opts.skip))
     opts.tags = set(join_split(opts.tags))
     opts.skip_tags = set(join_split(opts.skip_tags))
 
@@ -752,13 +776,13 @@ def main(**kwargs):
 
             def is_included(res_name):
                 return not(
-                    opts.only and res_name not in opts.only
+                    opts.only and not opts.only.match(res_name)
                     or opts.tags and opts.tags.isdisjoint(current_tags[res_name])
                 )
 
             def is_excluded(res_name):
                 return (
-                    opts.skip and res_name in opts.skip
+                    opts.skip and opts.skip.match(res_name)
                     or opts.skip_tags and not opts.skip_tags.isdisjoint(current_tags[res_name])
                 )
 
