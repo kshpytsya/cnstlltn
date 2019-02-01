@@ -677,8 +677,8 @@ def toposort_dependencies(of, deps):
 )
 def main(**kwargs):
     """
-    Options --only, --tags, --skip, --skip-tags take space separated lists and can be supplied
-    multiple times with lists being accumulated. Note that it is necessary to use quoting or
+    Options --only, --skip take space separated lists and can be supplied multiple
+    times with lists being accumulated. Note that it is necessary to use quoting or
     backslash to include space as a part of an option value.
 
     Names specified in --only and --skip are expanded using Bash-style brace expansion [1]
