@@ -18,6 +18,7 @@ import toposort
 from . import diffformatter
 from .model import Model
 from .statestorage import StateStorage
+from . import tagexpr
 
 # TODO
 # shellcheck
@@ -330,6 +331,18 @@ def names_to_re(names):
                 for j in braceexpand.braceexpand(i)
             )
         )
+    else:
+        return None
+
+
+def make_tags_matcher(exprs):
+    if exprs:
+        compiled = [tagexpr.compile(i) for i in exprs]
+
+        def evaluate(tags):
+            return any(i(tags) for i in compiled)
+
+        return evaluate
     else:
         return None
 
@@ -675,7 +688,10 @@ def main(**kwargs):
     [1] https://github.com/trendels/braceexpand
     [2] https://docs.python.org/3.7/library/fnmatch.html
 
-    Resource tags match tags in --tags/--skip-tags if tag intersection set is not empty.
+    Options --tags/--skip-tags accept boolean expressions, with "|" meaning OR, "&" meaning AND,
+    and "!" meaning NOT, "0" and "1" meaning true and false constants. Brackets are supported.
+    Tags containing spaces can be specified in double quotes. Entire expression has to be
+    quoted to avoid shell from interfering. Multiple --tag/--skip-tags are joined with OR.
     Tags currently defined in the model are used for existing resources, as opposed to
     those which where defined when those resources where previously brought up.
 
@@ -690,14 +706,14 @@ def main(**kwargs):
     """
     opts = attrdict.AttrMap(kwargs)
 
-    opts.only = names_to_re(join_split(opts.only))
-    opts.skip = names_to_re(join_split(opts.skip))
-    opts.tags = set(join_split(opts.tags))
-    opts.skip_tags = set(join_split(opts.skip_tags))
-
-    model = None
+    notification_cb = None
 
     try:
+        opts.only = names_to_re(join_split(opts.only))
+        opts.skip = names_to_re(join_split(opts.skip))
+        opts.tags = make_tags_matcher(opts.tags)
+        opts.skip_tags = make_tags_matcher(opts.skip_tags)
+
         model, notification_cb = load_model(opts.file, opts.workspace)
         validate_and_finalize_model(model)
 
@@ -777,13 +793,13 @@ def main(**kwargs):
             def is_included(res_name):
                 return not(
                     opts.only and not opts.only.match(res_name)
-                    or opts.tags and opts.tags.isdisjoint(current_tags[res_name])
+                    or opts.tags and not opts.tags(current_tags[res_name])
                 )
 
             def is_excluded(res_name):
                 return (
                     opts.skip and opts.skip.match(res_name)
-                    or opts.skip_tags and not opts.skip_tags.isdisjoint(current_tags[res_name])
+                    or opts.skip_tags and opts.skip_tags(current_tags[res_name])
                 )
 
             def is_included_and_not_excluded(res_name):

@@ -18,6 +18,7 @@ setup(
         'formic2>=1.0.3,<2',
         'graphviz>=0.10.1,<1',
         'jinja2>=2.10,<3',
+        'pyparsing>=2.3.1,<3',
         'toposort>=1.5,<2',
         'zope.interface>=4.5,<5',
     ],
