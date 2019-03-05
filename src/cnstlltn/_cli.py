@@ -44,6 +44,9 @@ def validate_and_finalize_model(model):
 
         dependencies = model.dependencies[res_name] = set()
 
+        for dep_res_name in res.data.depends:
+            dependencies.add(dep_res_name)
+
         for imp_name, (dep_res_name, dep_export_name) in res.data.imports.items():
             dependencies.add(dep_res_name)
 

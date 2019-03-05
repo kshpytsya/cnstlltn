@@ -12,6 +12,7 @@ class _ResourceData:
         self.const = {}
         self.exports = set()
         self.mementos = set()
+        self.depends = set()
 
         def make_per_bag(what):
             return dict((bag, what()) for bag in FILE_BAGS)
@@ -37,6 +38,12 @@ class Resource:
             self.data.tags.add(tag)
 
         return self
+
+    def depends(self, *resources):
+        for resource_name in resources:
+            assert isinstance(resource_name, str), "resource name must be a string"
+
+            self.data.depends.add(resource_name)
 
     def imports(self, **items):
         for import_name, (resource_name, export_name) in items.items():
