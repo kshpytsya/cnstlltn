@@ -4,7 +4,7 @@ setup(
     name="cnstlltn",
     setup_requires=["setuptools_scm"],
     use_scm_version=True,
-    python_requires=">=3.6, <=3.7",
+    python_requires=">=3.6, <4",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     entry_points={"console_scripts": ["cnstlltn = cnstlltn._cli:main"]},
