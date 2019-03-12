@@ -362,6 +362,7 @@ def up_resource(
     resource,
     resources_vars,
     state,
+    ignore_identity_change,
 ):
     res_dir.mkdir()
     exports_dir = res_dir / "exports"
@@ -446,7 +447,7 @@ def up_resource(
         resource_state['dirty'] = True
         resource_state.pop('exports', None)
 
-        if not is_new_resource:
+        if not is_new_resource and not ignore_identity_change:
             old_identity = old_up_and_common.get("identity")
             new_identity = new_up_and_common.get("identity")
             if old_identity != new_identity:
@@ -671,6 +672,11 @@ def toposort_dependencies(of, deps):
     '--step',
     is_flag=True,
     help="confirm execution of each resource 'up'/'down' script"
+)
+@click.option(
+    '--ignore-identity-change',
+    is_flag=True,
+    help="do not down resources on indetity change"
 )
 @click.option(
     '--graph',
@@ -950,6 +956,7 @@ def main(**kwargs):
                             resource=resource,
                             resources_vars=resources_vars,
                             state=state,
+                            ignore_identity_change=opts.ignore_identity_change,
                         )
                         notification_cb('resource-up-done', res_name)
                 finally:
