@@ -408,9 +408,10 @@ def up_resource(
     resource_vars = resources_vars[resource.name] = {}
     resource_mementos_modes = {}
 
-    resource_state['files'] = new_files
-    resource_state['deps'] = new_deps
-    resource_state['tags'] = new_tags
+    def set_new_resource_state():
+        resource_state['files'] = new_files
+        resource_state['deps'] = new_deps
+        resource_state['tags'] = new_tags
 
     def check_products():
         for x_kind, x_set, x_var in [
@@ -439,13 +440,43 @@ def up_resource(
         if debug and not is_new_resource:
             show_dict_diff(old_up_and_common, new_up_and_common)
 
-        resource_state['dirty'] = True
-        resource_state.pop('exports', None)
-        resource_state['files'] = new_files
-        state.write()
-
         if step:
             click.confirm("Proceed?", abort=True, default=True)
+
+        resource_state['dirty'] = True
+        resource_state.pop('exports', None)
+
+        if not is_new_resource:
+            old_identity = old_up_and_common.get("identity")
+            new_identity = new_up_and_common.get("identity")
+            if old_identity != new_identity:
+                def format_id(s):
+                    if s is None:
+                        return "(unset)"
+                    else:
+                        return "'{}'".format(s)
+
+                click.echo(
+                    "Identity of resource '{}' has changed from {} to {}. "
+                    "Will down the old resource before bringing up a new one.".format(
+                        resource.name,
+                        format_id(old_identity),
+                        format_id(new_identity)
+                    )
+                )
+
+                res_dir_down = res_dir.with_suffix(".down")
+                res_dir_down.mkdir()
+
+                for bag in ('common', 'down'):
+                    write_files(old_files.get(bag, {}), res_dir_down)
+
+                state.write()
+
+                run_script(kind='down', res_dir=res_dir_down, res_name=resource.name, debug=debug, confirm_bail=True)
+
+        set_new_resource_state()
+        state.write()
 
         run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
 
@@ -494,6 +525,7 @@ def up_resource(
         message = resource_state.get('message')
 
         if (old_deps, old_files, old_tags) != (new_deps, new_files, new_tags):
+            set_new_resource_state()
             state.write()
 
     if message:

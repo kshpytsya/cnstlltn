@@ -115,6 +115,10 @@ class Resource:
         assert '..' not in dest.parts, "path cannot contain '..'"
         assert dest.parts, "path cannot be a directory"
 
+        if dest.parts == ("identity",):
+            if bag not in ('common', 'up'):
+                raise RuntimeError("'identity' must be in either 'common' or 'up' bag")
+
         for check_bag in FILE_BAGS if bag == 'common' else (bag, 'common'):
             if dest.parts in self.data._dirs[check_bag]:
                 raise RuntimeError("path is a directory: {}".format(dest))
