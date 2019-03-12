@@ -28,11 +28,26 @@ class Resource:
         self.model = model
         self.name = name
         self.data = _ResourceData()
+        self.frozen = False
+
+    def freeze(self):
+        assert not self.frozen, "already frozen"
+
+        self.frozen = True
+
+    def thaw(self):
+        assert self.frozen, "not frozen"
+
+        self.frozen = False
 
     def always_refresh(self):
+        assert not self.frozen, "cannot modify frozen resource"
+
         self.data.always_refresh = True
 
     def tags(self, *tags):
+        assert not self.frozen, "cannot modify frozen resource"
+
         for tag in tags:
             assert isinstance(tag, str), "tag must be a string"
             self.data.tags.add(tag)
@@ -40,12 +55,16 @@ class Resource:
         return self
 
     def depends(self, *resources):
+        assert not self.frozen, "cannot modify frozen resource"
+
         for resource_name in resources:
             assert isinstance(resource_name, str), "resource name must be a string"
 
             self.data.depends.add(resource_name)
 
     def imports(self, **items):
+        assert not self.frozen, "cannot modify frozen resource"
+
         for import_name, (resource_name, export_name) in items.items():
             assert isinstance(resource_name, str), "resource name must be a string"
             assert isinstance(export_name, str), "export name must be a string"
@@ -56,6 +75,8 @@ class Resource:
         return self
 
     def const(self, **items):
+        assert not self.frozen, "cannot modify frozen resource"
+
         for name, value in items.items():
             assert isinstance(value, str), "const value must be a string"
 
@@ -65,6 +86,8 @@ class Resource:
         return self
 
     def exports(self, *items):
+        assert not self.frozen, "cannot modify frozen resource"
+
         for export_name in items:
             assert isinstance(export_name, str), "export name must be a string"
             assert export_name.isidentifier(), "export name must be a valid identifier"
@@ -74,6 +97,8 @@ class Resource:
         return self
 
     def mementos(self, *items):
+        assert not self.frozen, "cannot modify frozen resource"
+
         for name in items:
             assert isinstance(name, str), "memento name must be a string"
             assert pathlib.posixpath.sep not in name, "memento name cannot contain path separator"
@@ -83,6 +108,7 @@ class Resource:
         return self
 
     def file(self, bag, dest, src, *, dedent_str=True):
+        assert not self.frozen, "cannot modify frozen resource"
         assert bag in FILE_BAGS, "unknown bag: " + bag
         dest = pathlib.PurePosixPath(dest)
         assert not dest.is_absolute(), "path cannot be absolute"
@@ -115,6 +141,7 @@ class Resource:
         return self
 
     def script_chunk(self, bag, chunk, *, order=0, dedent_str=True):
+        assert not self.frozen, "cannot modify frozen resource"
         assert bag in FILE_BAGS, "unknown bag: " + bag
         assert isinstance(chunk, str), "chunk must be a string"
         assert isinstance(order, int), "order must be an integer"
