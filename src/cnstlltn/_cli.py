@@ -34,7 +34,7 @@ def validate_and_finalize_model(model):
     model.dependencies = {}
 
     for res_name, res in model.resources.items():
-        res.thaw()
+        res.frozen = False
         for bag in ('up', 'down'):
             res.file(bag, "script.sh", "\n".join([
                 i[1] for i in sorted(
