@@ -5,7 +5,7 @@ import click
 import fnmatch
 import graphviz
 import json
-# import os
+import os
 import pathlib
 import re
 import runpy
@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import toposort
 
 from . import diffformatter
@@ -363,6 +364,7 @@ def up_resource(
     resources_vars,
     state,
     ignore_identity_change,
+    ignore_checkpoints,
 ):
     res_dir.mkdir()
     exports_dir = res_dir / "exports"
@@ -476,10 +478,30 @@ def up_resource(
 
                 run_script(kind='down', res_dir=res_dir_down, res_name=resource.name, debug=debug, confirm_bail=True)
 
+        last_checkpoint = resource_state.pop('checkpoint', None)
+        if last_checkpoint is not None and not ignore_checkpoints:
+            res_dir.joinpath("last-checkpoint").write_text(last_checkpoint)
+
         set_new_resource_state()
         state.write()
 
-        run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
+        checkpoint_fifo = res_dir.joinpath("checkpoint")
+        os.mkfifo(checkpoint_fifo)
+
+        def checkpoint_thread_func():
+            with checkpoint_fifo.open() as f:
+                for line in f:
+                    line = line.rstrip("\n")
+                    resource_state['checkpoint'] = line
+                    state.write()
+
+        checkpoint_thread = threading.Thread(target=checkpoint_thread_func)
+
+        checkpoint_thread.start()
+        with checkpoint_fifo.open("w"):
+            run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
+
+        checkpoint_thread.join()
 
         read_files(exports_dir, dest=resource_vars)
 
@@ -513,6 +535,7 @@ def up_resource(
             resource_state['state'] = istate
         else:
             resource_state.pop('state', None)
+        resource_state.pop('checkpoint', None)
 
         state.write()
     else:
@@ -676,7 +699,12 @@ def toposort_dependencies(of, deps):
 @click.option(
     '--ignore-identity-change',
     is_flag=True,
-    help="do not down resources on indetity change"
+    help="do not down resources on indentity change"
+)
+@click.option(
+    '--ignore-checkpoints',
+    is_flag=True,
+    help="ignore checkpoints for dirty resources"
 )
 @click.option(
     '--graph',
@@ -957,6 +985,7 @@ def main(**kwargs):
                             resources_vars=resources_vars,
                             state=state,
                             ignore_identity_change=opts.ignore_identity_change,
+                            ignore_checkpoints=opts.ignore_checkpoints,
                         )
                         notification_cb('resource-up-done', res_name)
                 finally:
