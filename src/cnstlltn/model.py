@@ -13,6 +13,7 @@ class _ResourceData:
         self.exports = set()
         self.mementos = set()
         self.depends = set()
+        self.used_modes = set()
 
         def make_per_bag(what):
             return dict((bag, what()) for bag in FILE_BAGS)
@@ -158,6 +159,13 @@ class Resource:
 
         return self
 
+    def use_modes(self, *names):
+        assert not self.frozen, "cannot modify frozen resource"
+
+        for name in names:
+            assert isinstance(name, str), "mode name must be a string"
+            self.data.used_modes.add(name)
+
 
 class Model:
     def __init__(self, base_path, workspace):
@@ -166,6 +174,7 @@ class Model:
         self.statestorage = None
         self.resources = {}
         self.aliases = {}
+        self.modes = {}
 
     def resource(self, name, aliases=[]):
         assert isinstance(name, str), "resource name must be a string"
@@ -197,3 +206,33 @@ class Model:
             self.aliases[alias] = name
 
         return r
+
+    def mode(self, name, **kw):
+        kw.setdefault("default", None)
+        kw.setdefault("choices", None)
+        kw.setdefault("validate_cb", None)
+        kw.setdefault("show_choices", True)
+        kw.setdefault("show_default", True)
+
+        def check(
+            *,
+            default,
+            choices,
+            help,
+            validate_cb,
+            show_choices,
+            show_default,
+        ):
+            assert isinstance(help, str), "help must be a string"
+            assert default is None or isinstance(default, str), "default value must be a string"
+            assert choices is None or all(isinstance(choice, str) for choice in choices), "all choices must be strings"
+            assert validate_cb is None or callable(validate_cb), "validate_cb must be callable"
+
+        check(**kw)
+
+        assert isinstance(name, str), "mode name must be a string"
+        assert name.isidentifier(), "mode name must be a valid identifier"
+        if name in self.modes:
+            raise RuntimeError("Mode '{}' is already defined".format(name))
+
+        self.modes[name] = kw

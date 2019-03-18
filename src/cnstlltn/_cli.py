@@ -26,6 +26,54 @@ from . import tagexpr
 # dot tmpdir
 
 
+def format_str_list(items):
+    return ", ".join(json.dumps(i) for i in items)
+
+
+def process_modes(model_modes, opt_mode):
+    mode_values = {}
+
+    for mode_name, mode_desc in model_modes.items():
+        mode_values[mode_name] = mode_desc['default']
+
+    for mode_str in opt_mode:
+        fields = mode_str.split("=", 1)
+        if len(fields) == 1:
+            fields.append("1")
+
+        mode_name, mode_value = fields
+
+        if mode_name not in model_modes:
+            raise click.ClickException("undefined mode '{}'".format(mode_name))
+
+        mode_values[mode_name] = mode_value
+
+    for mode_name, mode_desc in model_modes.items():
+        mode_value = mode_values[mode_name]
+
+        if mode_desc['choices'] is not None and mode_value not in mode_desc['choices']:
+            raise click.ClickException(
+                "'{}' is not a valid value for mode '{}'. Valid values are: {}".format(
+                    mode_value,
+                    mode_name,
+                    format_str_list(mode_desc['choices'])
+                )
+            )
+
+        if mode_desc['validate_cb'] is not None:
+            try:
+                mode_desc['validate_cb'](mode_value, values=mode_values)
+            except ValueError as e:
+                raise click.ClickException(e)
+
+    return mode_values
+
+
+def add_modes_to_env(env, used_modes, mode_values):
+    for mode_name in used_modes:
+        env["MODE_" + mode_name] = mode_values[mode_name]
+
+
 def validate_and_finalize_model(model):
     if model.statestorage is None:
         raise click.ClickException("'statestorage' has not been set")
@@ -71,6 +119,14 @@ def validate_and_finalize_model(model):
 
         if not res.data.tags:
             res.tags('untagged')
+
+        for used_mode in res.data.used_modes:
+            if used_mode not in model.modes:
+                raise click.ClickException(
+                    "resource '{}' uses undefined mode '{}'".format(
+                        res_name,
+                        used_mode
+                    ))
 
     try:
         model.resource_order = toposort.toposort_flatten(model.dependencies)
@@ -221,7 +277,14 @@ def make_graph(
     return graph
 
 
-def run_script(*, kind, res_dir, res_name, debug, confirm_bail=False):
+def run_script(*, kind, res_dir, res_name, debug, env, confirm_bail=False):
+    new_env = dict(os.environ)
+    for i, j in env.items():
+        if j is None:
+            new_env.pop(i, None)
+        else:
+            new_env[i] = j
+
     # TODO signal handling per
     # https://stefan.sofa-rockers.org/2013/08/15/handling-sub-process-hierarchies-python-linux-os-x/
     cp = subprocess.run(
@@ -230,7 +293,8 @@ def run_script(*, kind, res_dir, res_name, debug, confirm_bail=False):
             "-c",
             "set -eu{}o pipefail; source script.sh".format("x" if debug else "")
         ],
-        cwd=res_dir
+        cwd=res_dir,
+        env=new_env
     )
 
     if cp.returncode != 0:
@@ -365,6 +429,7 @@ def up_resource(
     state,
     ignore_identity_change,
     ignore_checkpoints,
+    mode_values,
 ):
     res_dir.mkdir()
     exports_dir = res_dir / "exports"
@@ -476,14 +541,28 @@ def up_resource(
 
                 state.write()
 
-                run_script(kind='down', res_dir=res_dir_down, res_name=resource.name, debug=debug, confirm_bail=True)
+                env = {}
+                add_modes_to_env(env, resource_state.get('used_modes', []), mode_values)
+
+                run_script(
+                    kind='down',
+                    res_dir=res_dir_down,
+                    res_name=resource.name,
+                    debug=debug,
+                    confirm_bail=True,
+                    env=env
+                )
 
         last_checkpoint = resource_state.pop('checkpoint', None)
         if last_checkpoint is not None and not ignore_checkpoints:
             res_dir.joinpath("last-checkpoint").write_text(last_checkpoint)
 
         set_new_resource_state()
+        resource_state['used_modes'] = list(resource.data.used_modes)
         state.write()
+
+        env = {}
+        add_modes_to_env(env, resource_state['used_modes'], mode_values)
 
         checkpoint_fifo = res_dir.joinpath("checkpoint")
         os.mkfifo(checkpoint_fifo)
@@ -499,7 +578,13 @@ def up_resource(
 
         checkpoint_thread.start()
         with checkpoint_fifo.open("w"):
-            run_script(kind='up', res_dir=res_dir, res_name=resource.name, debug=debug)
+            run_script(
+                kind='up',
+                res_dir=res_dir,
+                res_name=resource.name,
+                debug=debug,
+                env=env
+            )
 
         checkpoint_thread.join()
 
@@ -564,6 +649,7 @@ def down_resource(
     res_dir,
     res_name,
     state,
+    mode_values,
 ):
     if step:
         click.confirm("Bringing down resource '{}'. Proceed?".format(res_name), abort=True, default=True)
@@ -580,7 +666,17 @@ def down_resource(
     resource_state['dirty'] = True
     state.write()
 
-    run_script(kind='down', res_dir=res_dir, res_name=res_name, debug=debug, confirm_bail=True)
+    env = {}
+    add_modes_to_env(env, resource_state.get('used_modes', []), mode_values)
+
+    run_script(
+        kind='down',
+        res_dir=res_dir,
+        res_name=res_name,
+        debug=debug,
+        confirm_bail=True,
+        env=env
+    )
 
     del state['resources'][res_name]
     state.write()
@@ -635,6 +731,32 @@ def with_all_dependents(of, deps):
 
 def toposort_dependencies(of, deps):
     return list(filter(lambda i: i in of, toposort.toposort_flatten(deps)))
+
+
+def help_modes_and_exit(model):
+    ctx = click.get_current_context()
+    formatter = ctx.make_formatter()
+
+    def make_help(desc):
+        result = []
+        result.append(desc['help'])
+
+        if desc['choices'] and desc['show_choices']:
+            result.append("Possible values: {}".format(format_str_list(desc['choices'])))
+
+        if desc['default'] is not None and desc['show_default']:
+            result.append("Default: {}".format(json.dumps(desc['default'])))
+
+        return ". ".join(result)
+
+    formatter.write_heading("Modes")
+    with formatter.indentation():
+        formatter.write_dl(list(
+            (mode_name, make_help(mode_desc))
+            for mode_name, mode_desc in sorted(model.modes.items())
+        ))
+    click.echo(formatter.getvalue(), color=ctx.color)
+    sys.exit(0)
 
 
 @click.command()
@@ -705,6 +827,17 @@ def toposort_dependencies(of, deps):
     '--ignore-checkpoints',
     is_flag=True,
     help="ignore checkpoints for dirty resources"
+)
+@click.option(
+    '--help-modes',
+    is_flag=True,
+    help="show description of modes defined in the model and exit"
+)
+@click.option(
+    '--mode',
+    multiple=True,
+    metavar="MODE[=VALUE]",
+    help="set the value for the mode. Not passing a value is the same as passing \"1\""
 )
 @click.option(
     '--graph',
@@ -785,6 +918,11 @@ def main(**kwargs):
         opts.skip_tags = make_tags_matcher(opts.skip_tags)
 
         model, notification_cb = load_model(opts.file, opts.workspace)
+
+        if opts.help_modes:
+            help_modes_and_exit(model)
+
+        mode_values = process_modes(model.modes, opts.mode)
         validate_and_finalize_model(model)
 
         with model.state as state:
@@ -966,6 +1104,7 @@ def main(**kwargs):
                             res_dir=res_dir,
                             res_name=res_name,
                             state=state,
+                            mode_values=mode_values
                         )
                         notification_cb('resource-down-done', res_name)
 
@@ -986,6 +1125,7 @@ def main(**kwargs):
                             state=state,
                             ignore_identity_change=opts.ignore_identity_change,
                             ignore_checkpoints=opts.ignore_checkpoints,
+                            mode_values=mode_values
                         )
                         notification_cb('resource-up-done', res_name)
                 finally:
