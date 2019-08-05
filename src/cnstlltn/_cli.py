@@ -804,6 +804,11 @@ def help_modes_and_exit(model):
     help="bring down all selected resources instead of bringing them up"
 )
 @click.option(
+    '--forget',
+    is_flag=True,
+    help="forget resources instead of bringing them down. Tread carefully and make backups!"
+)
+@click.option(
     '--full',
     is_flag=True,
     help="run 'up' scripts even for existing non-dirty up-to-date resources"
@@ -901,11 +906,11 @@ def main(**kwargs):
     Both direct and indirect dependencies and dependents are considered in --only, --tags, --skip, --skip-tags.
 
     Options --only and --tags also select dependencies of these resources for bringing up,
-    and dependents of these resources for bringing down.
+    and dependents of these resources for bringing down or forgetting.
 
     Options --skip and --skip-tags guarantee that resources selected by them are not going
     to be processed and will also skip bringing up of dependent resources and bringing
-    down of dependencies of these resources.
+    down or forgetting of dependencies of these resources.
     """
     opts = attrdict.AttrMap(kwargs)
 
@@ -1020,10 +1025,11 @@ def main(**kwargs):
                 resources_to_up = model.resource_order
                 resources_to_down -= set(model.resources)
 
-            report_sets.append(("All resources to bring down", sorted(resources_to_down)))
+            down_action_str = "forget" if opts.forget else "bring down"
+            report_sets.append((f"All resources to {down_action_str}", sorted(resources_to_down)))
             report_sets.append(("All resources to bring up", sorted(resources_to_up)))
             report_sets.append((
-                "Explicitly selected resources to bring down",
+                f"Explicitly selected resources to {down_action_str}",
                 sorted(filter(is_included_and_not_excluded, resources_to_down))
             ))
             report_sets.append((
@@ -1047,7 +1053,10 @@ def main(**kwargs):
             )
             resources_to_up = toposort_dependencies(resources_to_up, model.dependencies)
 
-            report_sets.append(("Will bring down (in this order)", resources_to_down))
+            if opts.forget:
+                report_sets.append((f"Will forget", sorted(resources_to_down)))
+            else:
+                report_sets.append((f"Will bring down (in this order)", resources_to_down))
             report_sets.append(("Will bring up (in this order)", resources_to_up))
 
             what_padding = max((len(what) for what, which in report_sets if which), default=0)
@@ -1094,19 +1103,28 @@ def main(**kwargs):
                 notification_cb('start')
 
                 try:
-                    for res_i, res_name in enumerate(resources_to_down):
-                        res_dir = work_dir / "down-{:04}-{}".format(res_i, res_name)
-                        notification_cb('resource-down-start', res_name)
-                        down_resource(
-                            debug=opts.debug,
-                            step=opts.step,
-                            messages=messages,
-                            res_dir=res_dir,
-                            res_name=res_name,
-                            state=state,
-                            mode_values=mode_values
-                        )
-                        notification_cb('resource-down-done', res_name)
+                    if opts.forget:
+                        for res_name in resources_to_down:
+                            del state['resources'][res_name]
+
+                        state.write()
+                        click.echo("Forgotten the following resources: {}".format(
+                            ", ".join(f"'{i}'" for i in sorted(resources_to_down))
+                        ))
+                    else:
+                        for res_i, res_name in enumerate(resources_to_down):
+                            res_dir = work_dir / "down-{:04}-{}".format(res_i, res_name)
+                            notification_cb('resource-down-start', res_name)
+                            down_resource(
+                                debug=opts.debug,
+                                step=opts.step,
+                                messages=messages,
+                                res_dir=res_dir,
+                                res_name=res_name,
+                                state=state,
+                                mode_values=mode_values
+                            )
+                            notification_cb('resource-down-done', res_name)
 
                     resources_vars = {}
                     for res_i, res_name in enumerate(resources_to_up):
