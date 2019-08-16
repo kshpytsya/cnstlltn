@@ -84,7 +84,7 @@ def validate_and_finalize_model(model):
 
     for res_name, res in model.resources.items():
         res.frozen = False
-        for bag in ('up', 'down'):
+        for bag in ('up', 'down', 'precheck'):
             res.file(bag, "script.sh", "\n".join([
                 i[1] for i in sorted(
                     res.data.script_chunks[bag] + res.data.script_chunks['common'],
@@ -429,6 +429,7 @@ def up_resource(
     state,
     ignore_identity_change,
     ignore_checkpoints,
+    ignore_precheck,
     mode_values,
 ):
     res_dir.mkdir()
@@ -553,6 +554,23 @@ def up_resource(
                     env=env
                 )
 
+        env = {}
+        add_modes_to_env(env, resource.data.used_modes, mode_values)
+
+        if is_new_resource and not ignore_precheck and new_files['precheck']['script.sh']:
+            res_dir_precheck = res_dir.with_suffix(".precheck")
+            res_dir_precheck.mkdir()
+            for bag in ('common', 'precheck'):
+                write_files(new_files.get(bag, {}), res_dir_precheck)
+
+            run_script(
+                kind='precheck',
+                res_dir=res_dir_precheck,
+                res_name=resource.name,
+                debug=debug,
+                env=env
+            )
+
         last_checkpoint = resource_state.pop('checkpoint', None)
         if last_checkpoint is not None and not ignore_checkpoints:
             res_dir.joinpath("last-checkpoint").write_text(last_checkpoint)
@@ -560,9 +578,6 @@ def up_resource(
         set_new_resource_state()
         resource_state['used_modes'] = list(resource.data.used_modes)
         state.write()
-
-        env = {}
-        add_modes_to_env(env, resource_state['used_modes'], mode_values)
 
         checkpoint_fifo = res_dir.joinpath("checkpoint")
         os.mkfifo(checkpoint_fifo)
@@ -832,6 +847,11 @@ def help_modes_and_exit(model):
     '--ignore-checkpoints',
     is_flag=True,
     help="ignore checkpoints for dirty resources"
+)
+@click.option(
+    '--ignore-precheck',
+    is_flag=True,
+    help="skip precheck scripts"
 )
 @click.option(
     '--help-modes',
@@ -1143,6 +1163,7 @@ def main(**kwargs):
                             state=state,
                             ignore_identity_change=opts.ignore_identity_change,
                             ignore_checkpoints=opts.ignore_checkpoints,
+                            ignore_precheck=opts.ignore_precheck,
                             mode_values=mode_values
                         )
                         notification_cb('resource-up-done', res_name)

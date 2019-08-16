@@ -1,7 +1,7 @@
 import pathlib
 import textwrap
 
-FILE_BAGS = 'up', 'down', 'common'
+FILE_BAGS = 'up', 'down', 'common', 'precheck'
 
 
 class _ResourceData:
