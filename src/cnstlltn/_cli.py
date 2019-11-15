@@ -85,12 +85,16 @@ def validate_and_finalize_model(model):
     for res_name, res in model.resources.items():
         res.frozen = False
         for bag in ('up', 'down', 'precheck'):
-            res.file(bag, "script.sh", "\n".join([
-                i[1] for i in sorted(
-                    res.data.script_chunks[bag] + res.data.script_chunks['common'],
-                    key=lambda i: i[0]
-                )
-            ]))
+            res.file(bag, "script.sh", "\n".join(
+                [
+                    "set -euo pipefail"
+                ] + [
+                    i[1] for i in sorted(
+                        res.data.script_chunks[bag] + res.data.script_chunks['common'],
+                        key=lambda i: i[0]
+                    )
+                ]
+            ))
 
         dependencies = model.dependencies[res_name] = set()
 
@@ -288,11 +292,9 @@ def run_script(*, kind, res_dir, res_name, debug, env, confirm_bail=False):
     # TODO signal handling per
     # https://stefan.sofa-rockers.org/2013/08/15/handling-sub-process-hierarchies-python-linux-os-x/
     cp = subprocess.run(
-        [
-            "/bin/bash",
-            "-c",
-            "set -eu{}o pipefail; source script.sh".format("x" if debug else "")
-        ],
+        ["/bin/bash"]
+        + (["-x"] if debug else [])
+        + ["script.sh"],
         cwd=res_dir,
         env=new_env
     )
