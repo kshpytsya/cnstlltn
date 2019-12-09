@@ -1,4 +1,4 @@
-import formic
+import glob
 import jinja2
 import json
 import pathlib
@@ -9,31 +9,37 @@ import textwrap
 def add_files_to_resource(
     resource,
     bag,
-    *formic_args,
-    **formic_kw
+    patterns,
+    *,
+    dest=".",
+    src=".",
 ):
-    """
-    https://formic.readthedocs.io/en/latest/api.html
-    """
-
-    dest = pathlib.Path(formic_kw.pop('dest', '.'))
+    dest = pathlib.Path(dest)
     assert not dest.is_absolute(), "'dest' cannot be an absolute path"
     assert '..' not in dest.parts, "'dest' path cannot contain '..'"
 
-    directory = pathlib.Path(formic_kw.pop('directory', '.'))
-    if not directory.is_absolute():
-        directory = resource.model.base_path.joinpath(directory).resolve()
+    src = pathlib.Path(src)
+    if not src.is_absolute():
+        src = resource.model.base_path.joinpath(src).resolve()
 
-    formic_kw['directory'] = directory
+    seen = set()
 
-    for file_name in formic.FileSet(*formic_args, **formic_kw):
-        file_path = pathlib.Path(file_name)
-        dest_file_path = dest.joinpath(file_path.relative_to(directory))
+    for pattern in patterns:
+        for file_name in glob.iglob(str(src.joinpath(pattern)), recursive=True):
+            if file_name in seen:
+                continue
 
-        if not file_path.is_file():
-            raise RuntimeError("do not know how to deal with '{}'".format(file_path))
+            seen.add(file_name)
 
-        resource.file(bag, dest_file_path, lambda _, file_path=file_path: file_path.read_text())
+            file_path = pathlib.Path(file_name)
+            if not file_path.is_file():
+                raise RuntimeError("do not know how to deal with '{}'".format(file_path))
+
+            resource.file(
+                bag,
+                dest.joinpath(file_path.relative_to(src)),
+                lambda _, file_path=file_path: file_path.read_text()
+            )
 
 
 def add_imports_as_json(
