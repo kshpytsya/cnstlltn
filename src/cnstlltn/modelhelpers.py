@@ -48,7 +48,7 @@ def add_imports_as_json(
     bag='common',
     file_name='imports.json'
 ):
-    resource.file(bag, file_name, lambda imports: json.dumps(imports))
+    resource.file(bag, file_name, lambda imports: json.dumps(imports, sort_keys=True))
 
 
 def format_shell_vars(v, name_prefix):
